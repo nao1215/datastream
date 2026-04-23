@@ -32,6 +32,9 @@ import gleam/erlang/atom.{type Atom}
 import gleam/erlang/process.{type Subject}
 
 @target(erlang)
+import gleam/list
+
+@target(erlang)
 import gleam/option.{type Option, None, Some}
 
 @target(erlang)
@@ -493,7 +496,7 @@ fn window_step(
         [] -> Done
         _ ->
           Next(
-            chunk_from_reverse(state.buffer),
+            chunk.from_list(list.reverse(state.buffer)),
             build_window_stream(WindowState(..state, buffer: []), ms),
           )
       }
@@ -518,29 +521,11 @@ fn window_wait(
     Ok(PumpDone) -> window_step(WindowState(..state, upstream_done: True), ms)
     Error(_) ->
       Next(
-        chunk_from_reverse(state.buffer),
+        chunk.from_list(list.reverse(state.buffer)),
         build_window_stream(
           WindowState(..state, buffer: [], window_start: deadline),
           ms,
         ),
       )
-  }
-}
-
-@target(erlang)
-fn chunk_from_reverse(buffer: List(a)) -> Chunk(a) {
-  chunk.from_list(reverse_list(buffer))
-}
-
-@target(erlang)
-fn reverse_list(list: List(a)) -> List(a) {
-  reverse_loop(list, [])
-}
-
-@target(erlang)
-fn reverse_loop(list: List(a), acc: List(a)) -> List(a) {
-  case list {
-    [] -> acc
-    [head, ..tail] -> reverse_loop(tail, [head, ..acc])
   }
 }
