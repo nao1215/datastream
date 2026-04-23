@@ -9,6 +9,15 @@
 //// process drives the consuming `Stream` and uses
 //// `process.receive(within: ms)` to wait simultaneously for the next
 //// element and for a timer deadline.
+////
+//// ## Limitation: incompatible with `from_subject`
+////
+//// Because every combinator pulls inside a spawned worker process,
+//// streams built from `datastream/erlang/source.from_subject` cannot
+//// be passed through this layer — an Erlang `Subject` can only be
+//// received by its owning process and the worker would `panic` on
+//// the first pull. The same constraint applies to
+//// `datastream/erlang/par`.
 
 @target(javascript)
 /// Sentinel value documenting that this module is BEAM-only.
