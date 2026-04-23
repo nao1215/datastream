@@ -47,7 +47,8 @@ pub fn to_list(chunk: Chunk(a)) -> List(a) {
   chunk.elements
 }
 
-/// Number of elements in `chunk`.
+/// Number of elements in `chunk`. O(n) in the current implementation
+/// (the chunk's element list is walked).
 pub fn size(chunk: Chunk(a)) -> Int {
   list.length(chunk.elements)
 }

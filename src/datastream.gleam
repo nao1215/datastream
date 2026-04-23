@@ -17,15 +17,15 @@
 /// want replay should materialise once with `fold.to_list`.
 ///
 /// The internal representation is intentionally hidden so the library is
-/// free to change it (list-backed, function-backed, chunk-batched, …)
+/// free to change it (list-backed, function-batched, chunk-batched, …)
 /// without a breaking change. `==` / `!=` carry no specified meaning;
 /// observational equality is via terminal reduction.
 ///
-/// Internally a `Stream(a)` carries both a `pull` function and a
-/// `close` function so the resource-safe sources from `source.resource`
-/// can be cleaned up on every termination path the library controls
-/// (normal end, downstream early-exit, early-exit folds, `try_each`
-/// failure). Pure `unfold`-built streams use a no-op `close`.
+/// The library threads a cleanup callback through every stream value so
+/// resource-safe sources from `source.resource` can be released on every
+/// termination path (normal end, downstream early-exit, early-exit
+/// folds, `try_each` failure). Pure (`unfold`-built) streams use a
+/// no-op cleanup.
 pub opaque type Stream(a) {
   Stream(pull: fn() -> Step(a, Stream(a)), close: fn() -> Nil)
 }
