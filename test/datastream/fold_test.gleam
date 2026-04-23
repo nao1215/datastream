@@ -112,3 +112,116 @@ pub fn reduce_on_empty_returns_none_test() {
 pub fn drain_returns_nil_test() {
   from_list([1, 2, 3]) |> fold.drain |> should.equal(Nil)
 }
+
+pub fn all_true_when_predicate_holds_for_every_element_test() {
+  from_list([1, 2, 3])
+  |> fold.all(satisfying: fn(x) { x > 0 })
+  |> should.equal(True)
+}
+
+pub fn all_false_on_first_failing_element_test() {
+  from_list([1, -2, 3])
+  |> fold.all(satisfying: fn(x) { x > 0 })
+  |> should.equal(False)
+}
+
+pub fn all_true_on_empty_test() {
+  from_list([])
+  |> fold.all(satisfying: fn(x) { x > 0 })
+  |> should.equal(True)
+}
+
+pub fn all_terminates_on_infinite_source_when_predicate_fails_test() {
+  repeat(0)
+  |> fold.all(satisfying: fn(x) { x > 0 })
+  |> should.equal(False)
+}
+
+pub fn any_true_when_some_element_matches_test() {
+  from_list([0, 0, 1])
+  |> fold.any(satisfying: fn(x) { x > 0 })
+  |> should.equal(True)
+}
+
+pub fn any_false_on_empty_test() {
+  from_list([])
+  |> fold.any(satisfying: fn(x) { x > 0 })
+  |> should.equal(False)
+}
+
+pub fn any_terminates_on_infinite_source_when_predicate_matches_test() {
+  repeat(1)
+  |> fold.any(satisfying: fn(x) { x > 0 })
+  |> should.equal(True)
+}
+
+pub fn find_returns_first_match_test() {
+  from_list([1, 2, 3])
+  |> fold.find(satisfying: fn(x) { x > 1 })
+  |> should.equal(Some(2))
+}
+
+pub fn find_returns_none_when_nothing_matches_test() {
+  from_list([1, 2, 3])
+  |> fold.find(satisfying: fn(x) { x > 99 })
+  |> should.equal(None)
+}
+
+pub fn sum_int_sums_elements_test() {
+  from_list([1, 2, 3]) |> fold.sum_int |> should.equal(6)
+}
+
+pub fn sum_int_on_empty_returns_zero_test() {
+  from_list([]) |> fold.sum_int |> should.equal(0)
+}
+
+pub fn sum_float_sums_elements_test() {
+  from_list([1.5, 2.5]) |> fold.sum_float |> should.equal(4.0)
+}
+
+pub fn sum_float_on_empty_returns_zero_point_zero_test() {
+  from_list([]) |> fold.sum_float |> should.equal(0.0)
+}
+
+pub fn product_int_multiplies_elements_test() {
+  from_list([1, 2, 3]) |> fold.product_int |> should.equal(6)
+}
+
+pub fn product_int_on_empty_returns_one_test() {
+  from_list([]) |> fold.product_int |> should.equal(1)
+}
+
+pub fn collect_result_all_ok_returns_ok_list_test() {
+  from_list([Ok(1), Ok(2), Ok(3)])
+  |> fold.collect_result
+  |> should.equal(Ok([1, 2, 3]))
+}
+
+pub fn collect_result_short_circuits_on_first_error_test() {
+  from_list([Ok(1), Error("x"), Ok(2)])
+  |> fold.collect_result
+  |> should.equal(Error("x"))
+}
+
+pub fn collect_result_on_empty_returns_ok_empty_test() {
+  from_list([])
+  |> fold.collect_result
+  |> should.equal(Ok([]))
+}
+
+pub fn partition_result_splits_oks_and_errors_in_order_test() {
+  from_list([Ok(1), Error("a"), Ok(2), Error("b")])
+  |> fold.partition_result
+  |> should.equal(#([1, 2], ["a", "b"]))
+}
+
+pub fn partition_map_routes_via_split_test() {
+  from_list([1, 2, 3, 4])
+  |> fold.partition_map(with: fn(x) {
+    case x % 2 == 0 {
+      True -> Ok(x)
+      False -> Error(x)
+    }
+  })
+  |> should.equal(#([2, 4], [1, 3]))
+}
