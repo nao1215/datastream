@@ -4,22 +4,67 @@
 //// involved, so callers can tell at the import site whether a
 //// pipeline runs in parallel.
 ////
-//// Three knobs cover the design space: `max_workers` (degree of
-//// parallelism), `max_buffer` (back-pressure ceiling), and the
-//// explicit ordered-vs-unordered choice. Unbounded concurrency is
-//// intentionally not offered.
+//// ## Concurrency knobs
+////
+//// - `max_workers`: degree of parallelism. The maximum number of BEAM
+////   processes that run the user function at once. Only `map_*` and
+////   `each_*` accept this knob; `merge` is fixed at one worker per
+////   input stream.
+//// - `max_buffer`: in-flight ceiling. The maximum number of elements
+////   pulled from the upstream(s) but not yet emitted to the downstream.
+////   Workers in flight (mid-`f(x)`) count toward this ceiling.
+////
+//// `max_buffer >= max_workers` is required where both apply; otherwise
+//// the buffer would fill before parallelism is reached.
+////
+//// ## What happens when `max_buffer` is reached
+////
+//// | function | behaviour |
+//// |----------|-----------|
+//// | `map_unordered` | new dispatch is paused; in-flight workers finish |
+//// | `map_ordered`   | new dispatch is paused; pending dict + workers cap |
+//// | `merge`         | per-worker `Continue` ack is withheld; workers wait |
+////
+//// ## Defaults
+////
+//// `default_max_workers = 4` and `default_max_buffer = 16` are the
+//// values used by the no-argument `merge`, `map_unordered`,
+//// `map_ordered`, `each_unordered`, `each_ordered`. They aim at the
+//// common case (mixed CPU + IO work, modest cardinality). Tune via
+//// the `_with` variants when:
+////
+//// - workload is IO-bound (consider `max_workers` of 16-128 and a
+////   correspondingly larger `max_buffer`)
+//// - workload is CPU-bound (consider `max_workers` equal to
+////   `erlang:system_info(schedulers_online)`)
+//// - upstream is rate-limited or memory-pressured (lower
+////   `max_buffer` to throttle pull rate)
+////
+//// ## Notes
+////
+//// - A `f(x)` that `panic`s leaves the pipeline blocked; this is a
+////   known limitation across all `par.*` combinators.
+//// - Unbounded concurrency is intentionally not offered.
 
 @target(javascript)
 /// Sentinel value documenting that this module is BEAM-only.
 pub const beam_only_marker: String = "datastream/erlang/par is BEAM-only"
 
 @target(erlang)
+/// Default `max_workers` for the no-argument variants of `map_*` and
+/// `each_*`.
+pub const default_max_workers: Int = 4
+
+@target(erlang)
+/// Default `max_buffer` for the no-argument variants of `merge`,
+/// `map_*`, and `each_*`.
+pub const default_max_buffer: Int = 16
+
+@target(erlang)
 import datastream.{type Stream, Done, Next}
 
 @target(erlang)
-import datastream/erlang/internal/pump.{
-  type Pump, type Stop, PumpDone, PumpElement,
-}
+import datastream/erlang/internal/pump.{type Stop}
 
 @target(erlang)
 import datastream/fold
@@ -36,6 +81,9 @@ import gleam/erlang/process.{type Subject}
 @target(erlang)
 import gleam/list
 
+@target(erlang)
+import gleam/option.{type Option, None, Some}
+
 // --- common argument validation --------------------------------------------
 
 @target(erlang)
@@ -44,9 +92,17 @@ fn validate_par_args(max_workers: Int, max_buffer: Int) -> Nil {
     True -> Nil
     False -> panic as "datastream/erlang/par: max_workers must be >= 1"
   }
+  case max_buffer >= max_workers {
+    True -> Nil
+    False -> panic as "datastream/erlang/par: max_buffer must be >= max_workers"
+  }
+}
+
+@target(erlang)
+fn validate_buffer(max_buffer: Int) -> Nil {
   case max_buffer >= 1 {
     True -> Nil
-    False -> panic as "datastream/erlang/par: max_buffer must be >= 1"
+    False -> panic as "datastream/erlang/par.merge: max_buffer must be >= 1"
   }
 }
 
@@ -58,6 +114,7 @@ type MapUnordered(a, b) {
     source: Stream(a),
     f: fn(a) -> b,
     max_workers: Int,
+    max_buffer: Int,
     workers_busy: Int,
     result_subject: Subject(b),
     source_drained: Bool,
@@ -65,14 +122,29 @@ type MapUnordered(a, b) {
 }
 
 @target(erlang)
+/// Run `f` in parallel using `default_max_workers` BEAM processes,
+/// emitting results in the order they finish.
+///
+/// See `map_unordered_with` for tunable concurrency.
+pub fn map_unordered(over stream: Stream(a), with f: fn(a) -> b) -> Stream(b) {
+  map_unordered_with(
+    over: stream,
+    with: f,
+    max_workers: default_max_workers,
+    max_buffer: default_max_buffer,
+  )
+}
+
+@target(erlang)
 /// Run `f` in parallel across at most `max_workers` BEAM processes.
 /// Results are emitted in the order they finish, NOT input order.
 ///
-/// `max_workers >= 1` and `max_buffer >= 1` are required; violations
-/// `panic` at construction. `max_buffer` is the per-instance prefetch
-/// ceiling; this minimal implementation does not yet apply
-/// back-pressure beyond capping `workers_busy` at `max_workers`.
-pub fn map_unordered(
+/// `max_workers >= 1` and `max_buffer >= max_workers` are required;
+/// violations `panic` at construction. Because `map_unordered` emits
+/// each result the moment it arrives, `in_flight = workers_busy`, and
+/// `max_buffer` only adds a ceiling redundant with `max_workers`. The
+/// argument is kept for symmetry with `map_ordered` and `merge`.
+pub fn map_unordered_with(
   over stream: Stream(a),
   with f: fn(a) -> b,
   max_workers max_workers: Int,
@@ -84,6 +156,7 @@ pub fn map_unordered(
     source: stream,
     f: f,
     max_workers: max_workers,
+    max_buffer: max_buffer,
     workers_busy: 0,
     result_subject: result_subject,
     source_drained: False,
@@ -126,7 +199,11 @@ fn map_unordered_step(
 
 @target(erlang)
 fn dispatch_unordered(state: MapUnordered(a, b)) -> MapUnordered(a, b) {
-  case state.source_drained || state.workers_busy >= state.max_workers {
+  case
+    state.source_drained
+    || state.workers_busy >= state.max_workers
+    || state.workers_busy >= state.max_buffer
+  {
     True -> state
     False ->
       case datastream.pull(state.source) {
@@ -156,12 +233,28 @@ type MapOrdered(a, b) {
     source: Stream(a),
     f: fn(a) -> b,
     max_workers: Int,
+    max_buffer: Int,
     workers_busy: Int,
+    in_flight: Int,
     next_dispatch_index: Int,
     next_emit_index: Int,
     result_subject: Subject(#(Int, b)),
     pending: Dict(Int, b),
     source_drained: Bool,
+  )
+}
+
+@target(erlang)
+/// Run `f` in parallel using `default_max_workers` BEAM processes,
+/// emitting results in input order.
+///
+/// See `map_ordered_with` for tunable concurrency.
+pub fn map_ordered(over stream: Stream(a), with f: fn(a) -> b) -> Stream(b) {
+  map_ordered_with(
+    over: stream,
+    with: f,
+    max_workers: default_max_workers,
+    max_buffer: default_max_buffer,
   )
 }
 
@@ -172,25 +265,23 @@ type MapOrdered(a, b) {
 /// `max_buffer >= max_workers` is REQUIRED: if `max_buffer` were
 /// smaller, the buffer would fill while waiting for an early result
 /// and ordering could not be enforced without stalling. Violation
-/// panics at construction.
-pub fn map_ordered(
+/// panics at construction. `in_flight = workers_busy + pending dict
+/// size`; dispatch is paused once it reaches `max_buffer`.
+pub fn map_ordered_with(
   over stream: Stream(a),
   with f: fn(a) -> b,
   max_workers max_workers: Int,
   max_buffer max_buffer: Int,
 ) -> Stream(b) {
   validate_par_args(max_workers, max_buffer)
-  case max_buffer >= max_workers {
-    True -> Nil
-    False ->
-      panic as "datastream/erlang/par.map_ordered: max_buffer must be >= max_workers"
-  }
   let result_subject = process.new_subject()
   build_map_ordered_stream(MapOrdered(
     source: stream,
     f: f,
     max_workers: max_workers,
+    max_buffer: max_buffer,
     workers_busy: 0,
+    in_flight: 0,
     next_dispatch_index: 0,
     next_emit_index: 0,
     result_subject: result_subject,
@@ -226,6 +317,7 @@ fn map_ordered_step(state: MapOrdered(a, b)) -> datastream.Step(b, Stream(b)) {
             ..state,
             pending: dict.delete(state.pending, state.next_emit_index),
             next_emit_index: state.next_emit_index + 1,
+            in_flight: state.in_flight - 1,
           ),
         ),
       )
@@ -249,7 +341,11 @@ fn map_ordered_step(state: MapOrdered(a, b)) -> datastream.Step(b, Stream(b)) {
 
 @target(erlang)
 fn dispatch_ordered(state: MapOrdered(a, b)) -> MapOrdered(a, b) {
-  case state.source_drained || state.workers_busy >= state.max_workers {
+  case
+    state.source_drained
+    || state.workers_busy >= state.max_workers
+    || state.in_flight >= state.max_buffer
+  {
     True -> state
     False ->
       case datastream.pull(state.source) {
@@ -267,6 +363,7 @@ fn dispatch_ordered(state: MapOrdered(a, b)) -> MapOrdered(a, b) {
               ..state,
               source: rest,
               workers_busy: state.workers_busy + 1,
+              in_flight: state.in_flight + 1,
               next_dispatch_index: position + 1,
             ),
           )
@@ -278,15 +375,26 @@ fn dispatch_ordered(state: MapOrdered(a, b)) -> MapOrdered(a, b) {
 // --- each_ordered / each_unordered ----------------------------------------
 
 @target(erlang)
-/// Side-effect-only variant of `map_ordered`. Drives the stream to
-/// completion and returns `Nil`.
-pub fn each_ordered(
+/// Side-effect-only variant of `map_ordered`. Uses
+/// `default_max_workers` and `default_max_buffer`.
+pub fn each_ordered(over stream: Stream(a), with effect: fn(a) -> Nil) -> Nil {
+  each_ordered_with(
+    over: stream,
+    with: effect,
+    max_workers: default_max_workers,
+    max_buffer: default_max_buffer,
+  )
+}
+
+@target(erlang)
+/// Side-effect-only variant of `map_ordered_with`.
+pub fn each_ordered_with(
   over stream: Stream(a),
   with effect: fn(a) -> Nil,
   max_workers max_workers: Int,
   max_buffer max_buffer: Int,
 ) -> Nil {
-  map_ordered(
+  map_ordered_with(
     over: stream,
     with: fn(x) {
       effect(x)
@@ -299,15 +407,26 @@ pub fn each_ordered(
 }
 
 @target(erlang)
-/// Side-effect-only variant of `map_unordered`. Drives the stream to
-/// completion and returns `Nil`.
-pub fn each_unordered(
+/// Side-effect-only variant of `map_unordered`. Uses
+/// `default_max_workers` and `default_max_buffer`.
+pub fn each_unordered(over stream: Stream(a), with effect: fn(a) -> Nil) -> Nil {
+  each_unordered_with(
+    over: stream,
+    with: effect,
+    max_workers: default_max_workers,
+    max_buffer: default_max_buffer,
+  )
+}
+
+@target(erlang)
+/// Side-effect-only variant of `map_unordered_with`.
+pub fn each_unordered_with(
   over stream: Stream(a),
   with effect: fn(a) -> Nil,
   max_workers max_workers: Int,
   max_buffer max_buffer: Int,
 ) -> Nil {
-  map_unordered(
+  map_unordered_with(
     over: stream,
     with: fn(x) {
       effect(x)
@@ -322,13 +441,36 @@ pub fn each_unordered(
 // --- merge ---------------------------------------------------------------
 
 @target(erlang)
+type MergeSignal {
+  MergeContinue
+  MergeStop
+}
+
+@target(erlang)
+type MergeMsg(a) {
+  MergeNext(from: Subject(MergeSignal), element: a)
+  MergeDone(from: Subject(MergeSignal))
+}
+
+@target(erlang)
 type MergeState(a) {
   MergeState(
-    result_subj: Subject(Pump(a)),
-    stop_subjs: List(Subject(Stop)),
+    result_subj: Subject(MergeMsg(a)),
+    all_signals: List(Subject(MergeSignal)),
+    pending_continues: List(Subject(MergeSignal)),
+    pending_emit: Option(Subject(MergeSignal)),
     total: Int,
     completed: Int,
   )
+}
+
+@target(erlang)
+/// Interleave elements from every input stream in arrival order. Uses
+/// `default_max_buffer` as the in-flight ceiling.
+///
+/// See `merge_with` for tunable buffering.
+pub fn merge(streams streams: List(Stream(a))) -> Stream(a) {
+  merge_with(streams: streams, max_buffer: default_max_buffer)
 }
 
 @target(erlang)
@@ -336,31 +478,86 @@ type MergeState(a) {
 ///
 /// Order from each individual source is preserved relative to that
 /// source; cross-source order follows whichever worker process
-/// happens to deliver first. `max_buffer >= 1` is required.
+/// happens to deliver first.
 ///
-/// One worker process is spawned per input stream; the workers pump
-/// their source into a shared subject. The resulting `Stream` walks
-/// that subject and counts down workers as they signal that they are
-/// done. Downstream early-exit signals every still-running worker to
-/// close its upstream.
-pub fn merge(
+/// `max_buffer` bounds the number of in-flight elements: pulled by
+/// any worker but not yet emitted to the downstream. Implementation:
+/// at startup at most `max_buffer` workers are issued a `Continue`
+/// signal; the rest wait. Each worker pulls one element, sends it,
+/// and waits for the next `Continue`. The coordinator hands a
+/// `Continue` to the next waiting worker every time it emits an
+/// element downstream. If `max_buffer < len(streams)`, the late-
+/// starting workers wait until earlier ones drain.
+///
+/// `max_buffer >= 1` is required.
+pub fn merge_with(
   streams streams: List(Stream(a)),
   max_buffer max_buffer: Int,
 ) -> Stream(a) {
-  case max_buffer >= 1 {
-    True -> Nil
-    False -> panic as "datastream/erlang/par.merge: max_buffer must be >= 1"
-  }
+  validate_buffer(max_buffer)
   let result_subj = process.new_subject()
+  let coordinator_pid = process.self()
+  let all_signals =
+    list.map(streams, fn(stream) {
+      spawn_merge_pump(stream, result_subj, coordinator_pid)
+    })
   let total = list.length(streams)
-  let stop_subjs =
-    list.map(streams, fn(s) { pump.spawn_pump(over: s, into: result_subj) })
+  let initial_count = case max_buffer < total {
+    True -> max_buffer
+    False -> total
+  }
+  let initial = list.take(all_signals, initial_count)
+  let deferred = list.drop(all_signals, initial_count)
+  list.each(initial, fn(sig) { process.send(sig, MergeContinue) })
   build_merge_stream(MergeState(
     result_subj: result_subj,
-    stop_subjs: stop_subjs,
+    all_signals: all_signals,
+    pending_continues: deferred,
+    pending_emit: None,
     total: total,
     completed: 0,
   ))
+}
+
+@target(erlang)
+fn spawn_merge_pump(
+  stream: Stream(a),
+  result_subj: Subject(MergeMsg(a)),
+  coordinator_pid: process.Pid,
+) -> Subject(MergeSignal) {
+  let handshake = process.new_subject()
+  let _pid =
+    process.spawn_unlinked(fn() {
+      let my_signal = process.new_subject()
+      process.send(handshake, my_signal)
+      merge_pump(stream, result_subj, my_signal, coordinator_pid)
+    })
+  process.receive_forever(from: handshake)
+}
+
+@target(erlang)
+fn merge_pump(
+  stream: Stream(a),
+  result_subj: Subject(MergeMsg(a)),
+  my_signal: Subject(MergeSignal),
+  coordinator_pid: process.Pid,
+) -> Nil {
+  case process.receive(from: my_signal, within: 5000) {
+    Ok(MergeStop) -> datastream.close(stream)
+    Ok(MergeContinue) ->
+      case datastream.pull(stream) {
+        Next(element, rest) -> {
+          process.send(result_subj, MergeNext(my_signal, element))
+          merge_pump(rest, result_subj, my_signal, coordinator_pid)
+        }
+        Done -> process.send(result_subj, MergeDone(my_signal))
+      }
+    Error(_) ->
+      case process.is_alive(coordinator_pid) {
+        True -> merge_pump(stream, result_subj, my_signal, coordinator_pid)
+        False -> datastream.close(stream)
+      }
+  }
 }
 
 @target(erlang)
@@ -374,20 +571,55 @@ fn build_merge_stream(state: MergeState(a)) -> Stream(a) {
 fn merge_close(state: MergeState(a)) -> Nil {
   case state.completed >= state.total {
     True -> Nil
-    False -> list.each(state.stop_subjs, pump.stop)
+    False ->
+      list.each(state.all_signals, fn(sig) { process.send(sig, MergeStop) })
   }
 }
 
 @target(erlang)
 fn merge_step(state: MergeState(a)) -> datastream.Step(a, Stream(a)) {
+  let state = case state.pending_emit {
+    Some(prev) -> release_slot(state, prev, True)
+    None -> state
+  }
+  let state = MergeState(..state, pending_emit: None)
   case state.completed >= state.total {
     True -> Done
     False ->
       case process.receive_forever(from: state.result_subj) {
-        PumpElement(element) -> Next(element, build_merge_stream(state))
-        PumpDone ->
+        MergeNext(from, element) ->
+          Next(
+            element,
+            build_merge_stream(MergeState(..state, pending_emit: Some(from))),
+          )
+        MergeDone(from) -> {
+          let state = release_slot(state, from, False)
           merge_step(MergeState(..state, completed: state.completed + 1))
+        }
       }
+  }
+}
+
+@target(erlang)
+fn release_slot(
+  state: MergeState(a),
+  just_finished: Subject(MergeSignal),
+  finished_can_continue: Bool,
+) -> MergeState(a) {
+  // Round-robin: a worker that just emitted joins the back of the
+  // queue, then we hand Continue to whoever is at the front. This
+  // gives fair scheduling and avoids starving the first workers when
+  // streams > max_buffer.
+  let queue = case finished_can_continue {
+    True -> list.append(state.pending_continues, [just_finished])
+    False -> state.pending_continues
+  }
+  case queue {
+    [next, ..rest] -> {
+      process.send(next, MergeContinue)
+      MergeState(..state, pending_continues: rest)
+    }
+    [] -> MergeState(..state, pending_continues: queue)
   }
 }
 
