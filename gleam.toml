@@ -20,6 +20,11 @@ gleam = ">= 1.15.0"
 
 [dependencies]
 gleam_stdlib = ">= 0.44.0 and < 2.0.0"
+# `dataprep` is required by the `datastream/dataprep` integration
+# helpers (#17). Callers who do not import that module never use
+# `dataprep` at runtime; the dependency only exists so the helper
+# module can compile.
+dataprep = ">= 0.2.0 and < 1.0.0"
 
 [dev-dependencies]
 gleeunit = ">= 1.0.0 and < 2.0.0"
