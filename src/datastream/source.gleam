@@ -144,6 +144,17 @@ pub fn unfold(
   datastream.unfold(from: initial, with: step)
 }
 
+/// Unified failure shape for `try_resource`.
+///
+/// `OpenError(e)` carries the error returned by `open`; the stream
+/// emits exactly one of these and halts. `NextError(e)` wraps a
+/// per-element read error returned by `next`; the stream continues
+/// after one of these unless the caller stops it.
+pub type ResourceError(open_error, next_error) {
+  OpenError(open_error)
+  NextError(next_error)
+}
+
 /// Build a resource-backed stream that opens lazily and closes
 /// deterministically.
 ///
@@ -168,4 +179,83 @@ pub fn resource(
   close close: fn(state) -> Nil,
 ) -> Stream(a) {
   datastream.resource(open: open, next: next, close: close)
+}
+
+/// Build a resource-backed stream whose `open` and per-element `next`
+/// can both fail.
+///
+/// The two failure shapes are unified into the element type via
+/// `ResourceError`:
+///
+/// - When `open` returns `Error(e)`, the stream emits exactly one
+///   element `Error(OpenError(e))` and halts. `close` is NOT called
+///   (there is no opened state to close).
+/// - When `open` returns `Ok(state)`, behaviour follows the contract
+///   of `resource`. `next` returning `Next(Ok(x), state')` yields
+///   element `Ok(x)`; `Next(Error(e), state')` yields
+///   `Error(NextError(e))` and continues; `Done` halts and triggers
+///   `close(state)`.
+///
+/// Lazy: `open` runs on the first pull, NOT at construction. Each
+/// terminal call re-attempts `open`.
+///
+/// Downstream sees a single `Stream(Result(a, ResourceError(o, n)))`,
+/// so `fold.collect_result` and `fold.partition_result` work without
+/// further adaptation.
+pub fn try_resource(
+  open open: fn() -> Result(state, open_error),
+  next next: fn(state) -> Step(Result(a, next_error), state),
+  close close: fn(state) -> Nil,
+) -> Stream(Result(a, ResourceError(open_error, next_error))) {
+  datastream.make(
+    pull: fn() { try_resource_first_pull(open, next, close) },
+    close: fn() { Nil },
+  )
+}
+
+fn try_resource_first_pull(
+  open: fn() -> Result(state, open_error),
+  next: fn(state) -> Step(Result(a, next_error), state),
+  close: fn(state) -> Nil,
+) -> Step(
+  Result(a, ResourceError(open_error, next_error)),
+  Stream(Result(a, ResourceError(open_error, next_error))),
+) {
+  case open() {
+    Error(e) ->
+      Next(
+        element: Error(OpenError(e)),
+        state: datastream.make(pull: fn() { Done }, close: fn() { Nil }),
+      )
+    Ok(state) -> try_resource_pull(state, next, close)
+  }
+}
+
+fn try_resource_pull(
+  state: state,
+  next: fn(state) -> Step(Result(a, next_error), state),
+  close: fn(state) -> Nil,
+) -> Step(
+  Result(a, ResourceError(open_error, next_error)),
+  Stream(Result(a, ResourceError(open_error, next_error))),
+) {
+  case next(state) {
+    Done -> {
+      close(state)
+      Done
+    }
+    Next(element, next_state) -> {
+      let lifted = case element {
+        Ok(value) -> Ok(value)
+        Error(e) -> Error(NextError(e))
+      }
+      Next(
+        element: lifted,
+        state: datastream.make(
+          pull: fn() { try_resource_pull(next_state, next, close) },
+          close: fn() { close(next_state) },
+        ),
+      )
+    }
+  }
 }
