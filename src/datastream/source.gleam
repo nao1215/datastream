@@ -143,3 +143,29 @@ pub fn unfold(
 ) -> Stream(a) {
   datastream.unfold(from: initial, with: step)
 }
+
+/// Build a resource-backed stream that opens lazily and closes
+/// deterministically.
+///
+/// `open` runs on the first pull (NOT at construction), so holding a
+/// `Stream` value never holds a real-world handle until evaluation
+/// begins. Each terminal call re-runs `open`: a `Stream` is a pipeline
+/// definition, not a one-shot iterator.
+///
+/// `close` is honoured on every termination path the library controls:
+/// normal end (when `next` returns `Done`), downstream early-exit
+/// (`stream.take`, `stream.take_while`), early-exit folds (`fold.first`,
+/// `fold.find`, `fold.any`, `fold.all`, `fold.collect_result`), and
+/// `sink.try_each` failure. Termination caused by user-code panicking
+/// is best-effort.
+///
+/// `close` returns `Nil`. Errors that happen at close time are not
+/// propagated through the terminal's return value; callers that must
+/// observe close failures should use a sink that owns the lifecycle.
+pub fn resource(
+  open open: fn() -> state,
+  next next: fn(state) -> Step(a, state),
+  close close: fn(state) -> Nil,
+) -> Stream(a) {
+  datastream.resource(open: open, next: next, close: close)
+}

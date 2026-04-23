@@ -33,11 +33,15 @@ pub fn count(stream: Stream(a)) -> Int {
 
 /// Return the first element produced by the stream, if any.
 ///
-/// Pulls at most one element from upstream and stops; this makes `first`
-/// safe on infinite streams. Returns `None` if the stream is empty.
+/// Pulls at most one element from upstream, closes the unconsumed
+/// continuation, and stops. This makes `first` safe on infinite
+/// resource-backed streams. Returns `None` if the stream is empty.
 pub fn first(stream: Stream(a)) -> Option(a) {
   case datastream.pull(stream) {
-    Next(element, _) -> Some(element)
+    Next(element, rest) -> {
+      datastream.close(rest)
+      Some(element)
+    }
     Done -> None
   }
 }
@@ -100,7 +104,10 @@ pub fn all(over stream: Stream(a), satisfying predicate: fn(a) -> Bool) -> Bool 
     Next(element, rest) ->
       case predicate(element) {
         True -> all(over: rest, satisfying: predicate)
-        False -> False
+        False -> {
+          datastream.close(rest)
+          False
+        }
       }
   }
 }
@@ -115,7 +122,10 @@ pub fn any(over stream: Stream(a), satisfying predicate: fn(a) -> Bool) -> Bool 
     Done -> False
     Next(element, rest) ->
       case predicate(element) {
-        True -> True
+        True -> {
+          datastream.close(rest)
+          True
+        }
         False -> any(over: rest, satisfying: predicate)
       }
   }
@@ -132,7 +142,10 @@ pub fn find(
     Done -> None
     Next(element, rest) ->
       case predicate(element) {
-        True -> Some(element)
+        True -> {
+          datastream.close(rest)
+          Some(element)
+        }
         False -> find(in: rest, satisfying: predicate)
       }
   }
@@ -170,7 +183,10 @@ fn do_collect_result(
   case datastream.pull(stream) {
     Done -> Ok(list.reverse(acc))
     Next(Ok(value), rest) -> do_collect_result(rest, [value, ..acc])
-    Next(Error(e), _) -> Error(e)
+    Next(Error(e), rest) -> {
+      datastream.close(rest)
+      Error(e)
+    }
   }
 }
 
