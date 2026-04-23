@@ -111,3 +111,31 @@ pub fn race_single_source_passes_through_test() {
   |> fold.to_list
   |> should.equal([1, 2, 3])
 }
+
+@target(erlang)
+pub fn race_all_empty_contenders_yields_empty_test() {
+  par.race(streams: [source.empty(), source.empty()])
+  |> fold.to_list
+  |> should.equal([])
+}
+
+@target(erlang)
+pub fn race_one_empty_and_one_emitting_yields_emitting_test() {
+  par.race(streams: [source.empty(), source.from_list([1, 2, 3])])
+  |> fold.to_list
+  |> should.equal([1, 2, 3])
+}
+
+@target(erlang)
+pub fn race_multiple_empties_and_one_emitting_yields_emitting_test() {
+  par.race(streams: [source.empty(), source.empty(), source.from_list([42])])
+  |> fold.to_list
+  |> should.equal([42])
+}
+
+@target(erlang)
+pub fn race_emitting_first_and_empties_later_yields_emitting_test() {
+  par.race(streams: [source.from_list([7, 8]), source.empty(), source.empty()])
+  |> fold.to_list
+  |> should.equal([7, 8])
+}
