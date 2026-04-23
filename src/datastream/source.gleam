@@ -16,6 +16,8 @@
 //// on every terminal call: there is no implicit caching.
 
 import datastream.{type Step, type Stream, Done, Next}
+import gleam/dict.{type Dict}
+import gleam/option.{type Option, None, Some}
 
 /// A stream that yields no elements.
 pub fn empty() -> Stream(a) {
@@ -83,6 +85,48 @@ pub fn repeat(value: a) -> Stream(a) {
 pub fn iterate(from seed: a, with next: fn(a) -> a) -> Stream(a) {
   datastream.unfold(from: seed, with: fn(state) {
     Next(element: state, state: next(state))
+  })
+}
+
+/// Lift an `Option(a)` to a stream: `Some(x)` becomes a one-element
+/// stream, `None` becomes the empty stream.
+pub fn from_option(option: Option(a)) -> Stream(a) {
+  case option {
+    Some(value) -> once(value)
+    None -> empty()
+  }
+}
+
+/// Lift a `Result(a, e)` to a one-element `Stream(Result(a, e))`.
+///
+/// The `Error(e)` case is preserved as a single element rather than
+/// collapsed to the empty stream so the failure information survives
+/// through the pipeline. Callers that want to drop the error can chain
+/// a later `filter_map` or `collect_result`.
+pub fn from_result(result: Result(a, e)) -> Stream(Result(a, e)) {
+  once(result)
+}
+
+/// Yield each `#(key, value)` entry of a `Dict` exactly once.
+///
+/// Iteration order is not specified — it follows whatever order
+/// `dict.to_list` returns for the underlying target. Callers that need
+/// a deterministic order should funnel through `dict.to_list` and sort
+/// before constructing the stream.
+pub fn from_dict(d: Dict(k, v)) -> Stream(#(k, v)) {
+  d |> dict.to_list |> from_list
+}
+
+/// Yield each byte of a `BitArray` in order as an `Int` in `0..255`.
+///
+/// An empty `BitArray` produces the empty stream. This is the natural
+/// shape for the upcoming `binary` and `text.utf8_decode` work.
+pub fn from_bit_array(bytes: BitArray) -> Stream(Int) {
+  unfold(from: bytes, with: fn(remaining) {
+    case remaining {
+      <<byte:size(8), rest:bits>> -> Next(element: byte, state: rest)
+      _ -> Done
+    }
   })
 }
 
