@@ -11,6 +11,7 @@
 //// `text.utf8_decode` (separate issue) so the cost lives in one place.
 
 import datastream.{type Step, type Stream, Done, Next}
+import gleam/bit_array
 import gleam/option.{type Option, None, Some}
 import gleam/string
 
@@ -198,4 +199,196 @@ fn graphemes_pull(
           }
       }
   }
+}
+
+// --- UTF-8 decode / encode ------------------------------------------------
+
+/// Decode a stream of UTF-8 byte chunks into a stream of decoded
+/// strings, reassembling multi-byte codepoints split across chunks.
+///
+/// Each successfully decoded codepoint surfaces as `Ok(string)`. An
+/// invalid byte (lead byte that is not a valid UTF-8 start, or a
+/// missing/invalid continuation) emits exactly one `Error(Nil)` and
+/// decoding resumes from the next byte. An incomplete trailing
+/// sequence at end-of-stream emits a final `Error(Nil)` before halting.
+///
+/// The decoder holds a small internal buffer for partial multi-byte
+/// codepoints; it never materialises the full input.
+pub fn utf8_decode(over stream: Stream(BitArray)) -> Stream(Result(String, Nil)) {
+  utf8_decode_active(stream, <<>>, False)
+}
+
+fn utf8_decode_active(
+  source: Stream(BitArray),
+  buffer: BitArray,
+  source_drained: Bool,
+) -> Stream(Result(String, Nil)) {
+  datastream.make(
+    pull: fn() { utf8_decode_pull(source, buffer, source_drained) },
+    close: fn() {
+      case source_drained {
+        True -> Nil
+        False -> datastream.close(source)
+      }
+    },
+  )
+}
+
+fn utf8_decode_pull(
+  source: Stream(BitArray),
+  buffer: BitArray,
+  source_drained: Bool,
+) -> Step(Result(String, Nil), Stream(Result(String, Nil))) {
+  case extract_run(buffer, source_drained) {
+    RunOkAccum(bytes, remaining) ->
+      case bit_array.to_string(bytes) {
+        Ok(s) ->
+          Next(Ok(s), utf8_decode_active(source, remaining, source_drained))
+        Error(_) ->
+          Next(
+            Error(Nil),
+            utf8_decode_active(source, remaining, source_drained),
+          )
+      }
+    RunInvalid(remaining) ->
+      Next(Error(Nil), utf8_decode_active(source, remaining, source_drained))
+    RunNeedMore ->
+      case datastream.pull(source) {
+        Next(chunk, source_rest) ->
+          utf8_decode_pull(source_rest, bit_array.append(buffer, chunk), False)
+        Done -> utf8_decode_pull(source, buffer, True)
+      }
+    RunDone -> Done
+  }
+}
+
+type Run {
+  RunOkAccum(bytes: BitArray, remaining: BitArray)
+  RunInvalid(remaining: BitArray)
+  RunNeedMore
+  RunDone
+}
+
+fn extract_run(buffer: BitArray, source_drained: Bool) -> Run {
+  do_extract_run(buffer, <<>>, source_drained)
+}
+
+fn do_extract_run(
+  buffer: BitArray,
+  accumulated: BitArray,
+  source_drained: Bool,
+) -> Run {
+  case extract_codepoint(buffer, source_drained) {
+    DecodeOk(bytes, rest) ->
+      do_extract_run(rest, bit_array.append(accumulated, bytes), source_drained)
+    DecodeInvalid(rest) ->
+      case bit_array.byte_size(accumulated) {
+        0 -> RunInvalid(rest)
+        _ -> RunOkAccum(accumulated, buffer)
+      }
+    DecodeNeedMore ->
+      case bit_array.byte_size(accumulated) {
+        0 -> RunNeedMore
+        _ -> RunOkAccum(accumulated, buffer)
+      }
+    DecodeDone ->
+      case bit_array.byte_size(accumulated) {
+        0 -> RunDone
+        _ -> RunOkAccum(accumulated, <<>>)
+      }
+  }
+}
+
+type Decoded {
+  DecodeOk(bytes: BitArray, rest: BitArray)
+  DecodeInvalid(rest: BitArray)
+  DecodeNeedMore
+  DecodeDone
+}
+
+fn extract_codepoint(buffer: BitArray, source_drained: Bool) -> Decoded {
+  case buffer {
+    <<>> ->
+      case source_drained {
+        True -> DecodeDone
+        False -> DecodeNeedMore
+      }
+    <<lead:size(8), rest:bits>> ->
+      classify_and_extract(lead, rest, source_drained)
+    _ -> DecodeInvalid(<<>>)
+  }
+}
+
+fn classify_and_extract(
+  lead: Int,
+  rest: BitArray,
+  source_drained: Bool,
+) -> Decoded {
+  case lead {
+    l if l < 0x80 -> DecodeOk(<<l>>, rest)
+    l if l < 0xC2 -> DecodeInvalid(rest)
+    l if l < 0xE0 -> collect_continuation(lead, <<>>, rest, 1, source_drained)
+    l if l < 0xF0 -> collect_continuation(lead, <<>>, rest, 2, source_drained)
+    l if l < 0xF5 -> collect_continuation(lead, <<>>, rest, 3, source_drained)
+    _ -> DecodeInvalid(rest)
+  }
+}
+
+fn collect_continuation(
+  lead: Int,
+  collected: BitArray,
+  rest: BitArray,
+  need: Int,
+  source_drained: Bool,
+) -> Decoded {
+  case need {
+    0 -> DecodeOk(bit_array.append(<<lead>>, collected), rest)
+    _ -> consume_continuation(lead, collected, rest, need, source_drained)
+  }
+}
+
+fn consume_continuation(
+  lead: Int,
+  collected: BitArray,
+  rest: BitArray,
+  need: Int,
+  source_drained: Bool,
+) -> Decoded {
+  case rest {
+    <<>> ->
+      case source_drained {
+        True -> DecodeInvalid(<<>>)
+        False -> DecodeNeedMore
+      }
+    <<b:size(8), more:bits>> ->
+      case b >= 0x80 && b < 0xC0 {
+        True ->
+          collect_continuation(
+            lead,
+            bit_array.append(collected, <<b>>),
+            more,
+            need - 1,
+            source_drained,
+          )
+        False -> DecodeInvalid(rest)
+      }
+    _ -> DecodeInvalid(rest)
+  }
+}
+
+/// Encode a stream of strings as UTF-8 byte chunks.
+///
+/// Each input string maps to its UTF-8 encoding as a single
+/// `BitArray` element; an empty input string maps to the empty
+/// `BitArray`.
+pub fn utf8_encode(over stream: Stream(String)) -> Stream(BitArray) {
+  datastream.make(
+    pull: fn() {
+      case datastream.pull(stream) {
+        Next(s, rest) -> Next(bit_array.from_string(s), utf8_encode(over: rest))
+        Done -> Done
+      }
+    },
+    close: fn() { datastream.close(stream) },
+  )
 }
