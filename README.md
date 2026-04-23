@@ -33,20 +33,26 @@ API reference: <https://hexdocs.pm/datastream>
 
 ## Examples
 
+Each example below is a complete `src/app.gleam` you can paste in
+after `gleam new app && gleam add datastream`, then run with `gleam run`.
+
 ### Basic pipeline
 
 ```gleam
 import datastream/fold
 import datastream/source
 import datastream/stream
+import gleam/io
 
-let result =
-  source.iterate(from: 1, with: fn(x) { x + 1 })
-  |> stream.map(with: fn(x) { x * 2 })
-  |> stream.take(up_to: 5)
-  |> fold.to_list
-
-// [2, 4, 6, 8, 10]
+pub fn main() {
+  let result =
+    source.iterate(from: 1, with: fn(x) { x + 1 })
+    |> stream.map(with: fn(x) { x * 2 })
+    |> stream.take(up_to: 5)
+    |> fold.to_list
+  io.debug(result)
+  // [2, 4, 6, 8, 10]
+}
 ```
 
 ### Line-oriented text
@@ -55,13 +61,16 @@ let result =
 import datastream/fold
 import datastream/source
 import datastream/text
+import gleam/io
 
-let lines =
-  source.from_list(["hel", "lo\nwor", "ld\n"])
-  |> text.lines
-  |> fold.to_list
-
-// ["hello", "world"]
+pub fn main() {
+  let lines =
+    source.from_list(["hel", "lo\nwor", "ld\n"])
+    |> text.lines
+    |> fold.to_list
+  io.debug(lines)
+  // ["hello", "world"]
+}
 ```
 
 ### Binary framing
@@ -70,13 +79,16 @@ let lines =
 import datastream/binary
 import datastream/fold
 import datastream/source
+import gleam/io
 
-let frames =
-  source.from_list([<<2, 65>>, <<66, 1, 67>>])
-  |> binary.length_prefixed(prefix_size: 1)
-  |> fold.to_list
-
-// [<<65, 66>>, <<67>>]
+pub fn main() {
+  let frames =
+    source.from_list([<<2, 65>>, <<66, 1, 67>>])
+    |> binary.length_prefixed(prefix_size: 1)
+    |> fold.to_list
+  io.debug(frames)
+  // [<<65, 66>>, <<67>>]
+}
 ```
 
 ### Result-shaped streams
@@ -84,12 +96,15 @@ let frames =
 ```gleam
 import datastream/fold
 import datastream/source
+import gleam/io
 
-let result =
-  source.from_list([Ok(1), Ok(2), Error("bad input")])
-  |> fold.collect_result
-
-// Error("bad input")
+pub fn main() {
+  let result =
+    source.from_list([Ok(1), Ok(2), Error("bad input")])
+    |> fold.collect_result
+  io.debug(result)
+  // Error("bad input") : Result(List(Int), String)
+}
 ```
 
 ## Module guide
