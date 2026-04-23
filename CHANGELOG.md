@@ -13,3 +13,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   Actions CI for Erlang and JavaScript targets, release workflow,
   Dependabot config, glinter configuration, and placeholder `src/` /
   `test/` modules.
+- `CONTRIBUTING.md` and `SECURITY.md`.
