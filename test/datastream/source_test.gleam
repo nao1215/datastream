@@ -2,6 +2,10 @@ import datastream.{Done, Next}
 import datastream/fold
 import datastream/source
 import datastream/stream
+import gleam/dict
+import gleam/list
+import gleam/option.{None, Some}
+import gleam/string
 import gleeunit
 import gleeunit/should
 
@@ -115,4 +119,67 @@ pub fn unfold_is_repeatable_test() {
     })
   fold.to_list(s) |> should.equal([0, 1])
   fold.to_list(s) |> should.equal([0, 1])
+}
+
+pub fn from_option_some_yields_one_element_test() {
+  source.from_option(Some(5)) |> fold.to_list |> should.equal([5])
+}
+
+pub fn from_option_none_yields_empty_test() {
+  source.from_option(None) |> fold.to_list |> should.equal([])
+}
+
+pub fn from_result_ok_yields_one_ok_test() {
+  source.from_result(Ok(7)) |> fold.to_list |> should.equal([Ok(7)])
+}
+
+pub fn from_result_error_yields_one_error_test() {
+  source.from_result(Error("nope"))
+  |> fold.to_list
+  |> should.equal([Error("nope")])
+}
+
+pub fn from_dict_empty_yields_empty_test() {
+  source.from_dict(dict.from_list([])) |> fold.to_list |> should.equal([])
+}
+
+pub fn from_dict_yields_each_entry_once_test() {
+  source.from_dict(dict.from_list([#("a", 1), #("b", 2)]))
+  |> fold.to_list
+  |> list.sort(by: fn(left, right) { string.compare(left.0, right.0) })
+  |> should.equal([#("a", 1), #("b", 2)])
+}
+
+pub fn from_bit_array_empty_yields_empty_test() {
+  source.from_bit_array(<<>>) |> fold.to_list |> should.equal([])
+}
+
+pub fn from_bit_array_yields_each_byte_test() {
+  source.from_bit_array(<<1, 2, 255>>)
+  |> fold.to_list
+  |> should.equal([1, 2, 255])
+}
+
+pub fn from_bit_array_preserves_zero_bytes_test() {
+  source.from_bit_array(<<0, 0, 0>>)
+  |> fold.to_list
+  |> should.equal([0, 0, 0])
+}
+
+pub fn from_option_is_repeatable_test() {
+  let s = source.from_option(Some(42))
+  fold.to_list(s) |> should.equal([42])
+  fold.to_list(s) |> should.equal([42])
+}
+
+pub fn from_result_is_repeatable_test() {
+  let s = source.from_result(Ok("v"))
+  fold.to_list(s) |> should.equal([Ok("v")])
+  fold.to_list(s) |> should.equal([Ok("v")])
+}
+
+pub fn from_bit_array_is_repeatable_test() {
+  let s = source.from_bit_array(<<10, 20>>)
+  fold.to_list(s) |> should.equal([10, 20])
+  fold.to_list(s) |> should.equal([10, 20])
 }
