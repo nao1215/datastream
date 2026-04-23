@@ -52,6 +52,16 @@
 ////   still alive, so the liveness probe says "keep going". Always
 ////   drive the stream to a terminal or call `close` explicitly.
 //// - Unbounded concurrency is intentionally not offered.
+////
+//// ## Limitation: incompatible with `from_subject`
+////
+//// Every combinator in this module pulls from its upstream inside a
+//// spawned worker process. Streams built from
+//// `datastream/erlang/source.from_subject` cannot survive that, since
+//// an Erlang `Subject` can only be received by its owning process —
+//// the worker would `panic` on the first pull. Wrap subject streams
+//// outside the parallel layer (e.g. materialise to a list first) or
+//// route them through a non-`par.*` pipeline.
 
 @target(erlang)
 const merge_worker_liveness_check_ms: Int = 5000

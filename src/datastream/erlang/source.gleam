@@ -36,6 +36,12 @@ import gleam/erlang/process.{type Subject}
 /// The `Subject`'s lifecycle is owned by the caller: this stream
 /// only reads, it never closes the subject. The terminal completing
 /// is sufficient to release the stream's hold.
+///
+/// **Limitation:** the resulting stream cannot be passed to any
+/// combinator in `datastream/erlang/par` or `datastream/erlang/time`,
+/// nor to `datastream/erlang/source.timeout` — those run the pull in
+/// a worker process and the `Subject`'s owner-only receive
+/// constraint causes a `panic`.
 pub fn from_subject(
   from subject: Subject(a),
   while keep_running: fn() -> Bool,
