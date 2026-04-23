@@ -29,10 +29,9 @@ pub fn each(over stream: Stream(a), with effect: fn(a) -> Nil) -> Nil {
 /// first `Error(e)` and returning that error.
 ///
 /// On all-`Ok` returns `Ok(Nil)`. On the first `Error(e)`, no further
-/// element is pulled from upstream — this also satisfies the
-/// resource-close contract for resource-backed sources (introduced in
-/// a later phase): an upstream that holds a handle will see its `Done`
-/// branch reached when the unconsumed continuation is dropped.
+/// element is pulled from upstream and the upstream's `close` callback
+/// is invoked before `Error(e)` is returned, so resource-backed
+/// sources are released even on the early-exit path.
 pub fn try_each(
   over stream: Stream(a),
   with effect: fn(a) -> Result(Nil, e),
