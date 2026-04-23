@@ -502,3 +502,51 @@ pub fn resource_zip_closes_right_then_left_test() {
   events("c12_log_zip")
   |> should.equal(["open:left", "open:right", "close:left", "close:right"])
 }
+
+@target(erlang)
+pub fn resource_fold_find_closes_once_on_match_test() {
+  reset("c12_open_find")
+  reset("c12_close_find")
+  counted_resource([1, 2, 3, 4], "c12_open_find", "c12_close_find")
+  |> fold.find(satisfying: fn(x) { x == 2 })
+  |> should.equal(option.Some(2))
+  get_dict("c12_open_find") |> should.equal(1)
+  get_dict("c12_close_find") |> should.equal(1)
+}
+
+@target(erlang)
+pub fn resource_fold_any_closes_once_on_first_true_test() {
+  reset("c12_open_any")
+  reset("c12_close_any")
+  counted_resource([1, 2, 3, 4], "c12_open_any", "c12_close_any")
+  |> fold.any(satisfying: fn(x) { x >= 2 })
+  |> should.equal(True)
+  get_dict("c12_open_any") |> should.equal(1)
+  get_dict("c12_close_any") |> should.equal(1)
+}
+
+@target(erlang)
+pub fn resource_fold_all_closes_once_on_first_false_test() {
+  reset("c12_open_all")
+  reset("c12_close_all")
+  counted_resource([1, 2, 3, 4], "c12_open_all", "c12_close_all")
+  |> fold.all(satisfying: fn(x) { x < 2 })
+  |> should.equal(False)
+  get_dict("c12_open_all") |> should.equal(1)
+  get_dict("c12_close_all") |> should.equal(1)
+}
+
+@target(erlang)
+pub fn resource_fold_collect_result_closes_once_on_first_error_test() {
+  reset("c12_open_cr")
+  reset("c12_close_cr")
+  counted_resource(
+    [Ok(1), Ok(2), Error("bad"), Ok(3)],
+    "c12_open_cr",
+    "c12_close_cr",
+  )
+  |> fold.collect_result
+  |> should.equal(Error("bad"))
+  get_dict("c12_open_cr") |> should.equal(1)
+  get_dict("c12_close_cr") |> should.equal(1)
+}
