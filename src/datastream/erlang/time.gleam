@@ -55,6 +55,16 @@ fn now_ms() -> Int {
   erlang_monotonic_time(atom.create("millisecond"))
 }
 
+@target(erlang)
+/// Milliseconds remaining until `deadline`, clamped to a minimum of
+/// 0. Used as the `within` argument for `process.receive`.
+fn ms_until(deadline: Int) -> Int {
+  case deadline - now_ms() {
+    delta if delta > 0 -> delta
+    _ -> 0
+  }
+}
+
 // --- shared close handler ------------------------------------------------
 
 @target(erlang)
@@ -138,11 +148,7 @@ fn debounce_wait(
         PumpDone -> Done
       }
     Some(value) -> {
-      let now = now_ms()
-      let wait = case state.deadline - now {
-        delta if delta > 0 -> delta
-        _ -> 0
-      }
+      let wait = ms_until(state.deadline)
       case process.receive(from: state.result_subj, within: wait) {
         Ok(PumpElement(element)) ->
           debounce_wait(
@@ -305,12 +311,8 @@ fn sample_step(state: SampleState(a), ms: Int) -> datastream.Step(a, Stream(a)) 
 
 @target(erlang)
 fn sample_wait(state: SampleState(a), ms: Int) -> datastream.Step(a, Stream(a)) {
-  let now = now_ms()
   let deadline = state.window_start + ms
-  let wait = case deadline - now {
-    delta if delta > 0 -> delta
-    _ -> 0
-  }
+  let wait = ms_until(deadline)
   case process.receive(from: state.result_subj, within: wait) {
     Ok(PumpElement(element)) ->
       sample_wait(SampleState(..state, latest: Some(element)), ms)
@@ -427,7 +429,7 @@ fn rate_limit_handle(
           ms,
         ),
       )
-    False -> rate_limit_delay(element, state, count, ms, now)
+    False -> rate_limit_delay(element, state, count, ms)
   }
 }
 
@@ -437,13 +439,8 @@ fn rate_limit_delay(
   state: RateState(a),
   count: Int,
   ms: Int,
-  now: Int,
 ) -> datastream.Step(a, Stream(a)) {
-  let sleep_ms = case state.window_start + ms - now {
-    delta if delta > 0 -> delta
-    _ -> 0
-  }
-  process.sleep(sleep_ms)
+  process.sleep(ms_until(state.window_start + ms))
   let new_now = now_ms()
   Next(
     element,
@@ -518,12 +515,8 @@ fn window_wait(
   state: WindowState(a),
   ms: Int,
 ) -> datastream.Step(Chunk(a), Stream(Chunk(a))) {
-  let now = now_ms()
   let deadline = state.window_start + ms
-  let wait = case deadline - now {
-    delta if delta > 0 -> delta
-    _ -> 0
-  }
+  let wait = ms_until(deadline)
   case process.receive(from: state.result_subj, within: wait) {
     Ok(PumpElement(element)) ->
       window_wait(WindowState(..state, buffer: [element, ..state.buffer]), ms)
