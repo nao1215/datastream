@@ -481,7 +481,11 @@ type MergeState(a) {
   MergeState(
     result_subj: Subject(MergeMsg(a)),
     all_signals: List(Subject(MergeSignal)),
-    pending_continues: List(Subject(MergeSignal)),
+    // Round-robin queue of workers waiting for a `Continue`. Stored
+    // as a Banker's deque (front + reversed back) so enqueue and
+    // dequeue are amortised O(1).
+    pending_front: List(Subject(MergeSignal)),
+    pending_back: List(Subject(MergeSignal)),
     pending_emit: Option(Subject(MergeSignal)),
     total: Int,
     completed: Int,
@@ -536,7 +540,8 @@ pub fn merge_with(
   build_merge_stream(MergeState(
     result_subj: result_subj,
     all_signals: all_signals,
-    pending_continues: deferred,
+    pending_front: deferred,
+    pending_back: [],
     pending_emit: None,
     total: total,
     completed: 0,
@@ -635,17 +640,25 @@ fn release_slot(
   // Round-robin: a worker that just emitted joins the back of the
   // queue, then we hand Continue to whoever is at the front. This
   // gives fair scheduling and avoids starving the first workers when
-  // streams > max_buffer.
-  let queue = case finished_can_continue {
-    True -> list.append(state.pending_continues, [just_finished])
-    False -> state.pending_continues
+  // streams > max_buffer. The queue is a Banker's deque
+  // (front + reversed back); both operations are amortised O(1).
+  let back = case finished_can_continue {
+    True -> [just_finished, ..state.pending_back]
+    False -> state.pending_back
   }
-  case queue {
-    [next, ..rest] -> {
+  case state.pending_front {
+    [next, ..rest_front] -> {
       process.send(next, MergeContinue)
-      MergeState(..state, pending_continues: rest)
+      MergeState(..state, pending_front: rest_front, pending_back: back)
     }
-    [] -> MergeState(..state, pending_continues: queue)
+    [] ->
+      case list.reverse(back) {
+        [next, ..rest_front] -> {
+          process.send(next, MergeContinue)
+          MergeState(..state, pending_front: rest_front, pending_back: [])
+        }
+        [] -> MergeState(..state, pending_front: [], pending_back: [])
+      }
   }
 }
 
