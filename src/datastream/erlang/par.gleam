@@ -44,7 +44,17 @@
 ////
 //// - A `f(x)` that `panic`s leaves the pipeline blocked; this is a
 ////   known limitation across all `par.*` combinators.
+//// - `merge` workers poll for a coordinator-liveness signal every
+////   `merge_worker_liveness_check_ms` ms. If the caller of
+////   `merge` / `merge_with` drops the returned stream without
+////   reaching `close` (e.g. by losing a reference inside a
+////   long-running process), the workers stay resident: the caller is
+////   still alive, so the liveness probe says "keep going". Always
+////   drive the stream to a terminal or call `close` explicitly.
 //// - Unbounded concurrency is intentionally not offered.
+
+@target(erlang)
+const merge_worker_liveness_check_ms: Int = 5000
 
 @target(javascript)
 /// Sentinel value documenting that this module is BEAM-only.
@@ -542,7 +552,9 @@ fn merge_pump(
   my_signal: Subject(MergeSignal),
   coordinator_pid: process.Pid,
 ) -> Nil {
-  case process.receive(from: my_signal, within: 5000) {
+  case
+    process.receive(from: my_signal, within: merge_worker_liveness_check_ms)
+  {
     Ok(MergeStop) -> datastream.close(stream)
     Ok(MergeContinue) ->
       case datastream.pull(stream) {

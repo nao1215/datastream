@@ -323,3 +323,91 @@ pub fn merge_with_handles_infinite_streams_test() {
   |> list.length
   |> should.equal(5)
 }
+
+@target(erlang)
+pub fn map_unordered_with_bounds_in_flight_test() {
+  // Each worker enters f, sleeps to overlap with peers, leaves f.
+  // The peak observed concurrent in-flight count must not exceed
+  // max_workers (which equals in_flight bound for map_unordered).
+  let log = event_log.new_log()
+  source.unfold(from: 1, with: fn(n) { datastream.Next(n, n + 1) })
+  |> par.map_unordered_with(
+    with: fn(x) {
+      event_log.record_enter(log, named: "f")
+      process.sleep(20)
+      event_log.record_leave(log, named: "f")
+      x
+    },
+    max_workers: 3,
+    max_buffer: 8,
+  )
+  |> stream.take(up_to: 15)
+  |> fold.to_list
+  |> list.length
+  |> should.equal(15)
+
+  process.sleep(100)
+  let events = event_log.drain(log, within: 100)
+  let peak = event_log.peak_concurrent(events, named: "f")
+  { peak <= 3 } |> should.be_true
+}
+
+@target(erlang)
+pub fn map_ordered_with_bounds_in_flight_test() {
+  let log = event_log.new_log()
+  source.unfold(from: 1, with: fn(n) { datastream.Next(n, n + 1) })
+  |> par.map_ordered_with(
+    with: fn(x) {
+      event_log.record_enter(log, named: "f")
+      process.sleep(20)
+      event_log.record_leave(log, named: "f")
+      x
+    },
+    max_workers: 4,
+    max_buffer: 4,
+  )
+  |> stream.take(up_to: 20)
+  |> fold.to_list
+  |> list.length
+  |> should.equal(20)
+
+  process.sleep(100)
+  let events = event_log.drain(log, within: 100)
+  let peak = event_log.peak_concurrent(events, named: "f")
+  { peak <= 4 } |> should.be_true
+}
+
+@target(erlang)
+pub fn merge_with_bounds_in_flight_test() {
+  // Five infinite streams; max_buffer = 2 should keep at most two
+  // workers actively pulling (i.e. inside f) at any one time.
+  let log = event_log.new_log()
+  let make_stream = fn() {
+    source.unfold(from: 1, with: fn(n) { datastream.Next(n, n + 1) })
+    |> stream.map(with: fn(x) {
+      event_log.record_enter(log, named: "pump")
+      process.sleep(10)
+      event_log.record_leave(log, named: "pump")
+      x
+    })
+  }
+  par.merge_with(
+    streams: [
+      make_stream(),
+      make_stream(),
+      make_stream(),
+      make_stream(),
+      make_stream(),
+    ],
+    max_buffer: 2,
+  )
+  |> stream.take(up_to: 20)
+  |> fold.to_list
+  |> list.length
+  |> should.equal(20)
+
+  process.sleep(150)
+  let events = event_log.drain(log, within: 150)
+  let peak = event_log.peak_concurrent(events, named: "pump")
+  { peak <= 2 } |> should.be_true
+}

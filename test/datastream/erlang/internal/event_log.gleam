@@ -25,6 +25,8 @@ import gleam/erlang/process.{type Subject}
 pub type Event {
   ResourceOpen(name: String)
   ResourceClose(name: String)
+  EnterFn(name: String)
+  LeaveFn(name: String)
 }
 
 @target(erlang)
@@ -97,7 +99,7 @@ pub fn count_closes(events: List(Event)) -> Int {
 fn is_open(event: Event) -> Bool {
   case event {
     ResourceOpen(_) -> True
-    ResourceClose(_) -> False
+    _ -> False
   }
 }
 
@@ -105,7 +107,42 @@ fn is_open(event: Event) -> Bool {
 fn is_close(event: Event) -> Bool {
   case event {
     ResourceClose(_) -> True
-    ResourceOpen(_) -> False
+    _ -> False
+  }
+}
+
+@target(erlang)
+pub fn record_enter(log: Subject(Event), named name: String) -> Nil {
+  process.send(log, EnterFn(name))
+}
+
+@target(erlang)
+pub fn record_leave(log: Subject(Event), named name: String) -> Nil {
+  process.send(log, LeaveFn(name))
+}
+
+@target(erlang)
+/// Walk the events in arrival order, tracking running concurrent
+/// `EnterFn`/`LeaveFn` count for `name`, and return the peak.
+pub fn peak_concurrent(events: List(Event), named name: String) -> Int {
+  peak_loop(events, name, 0, 0)
+}
+
+@target(erlang)
+fn peak_loop(events: List(Event), name: String, running: Int, peak: Int) -> Int {
+  case events {
+    [] -> peak
+    [EnterFn(n), ..rest] if n == name -> {
+      let new_running = running + 1
+      let new_peak = case new_running > peak {
+        True -> new_running
+        False -> peak
+      }
+      peak_loop(rest, name, new_running, new_peak)
+    }
+    [LeaveFn(n), ..rest] if n == name ->
+      peak_loop(rest, name, running - 1, peak)
+    [_, ..rest] -> peak_loop(rest, name, running, peak)
   }
 }
 
