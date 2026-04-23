@@ -1,6 +1,7 @@
 import datastream.{Done, Next}
 import datastream/binary
 import datastream/fold
+import gleam/list
 import gleeunit
 import gleeunit/should
 
@@ -90,6 +91,41 @@ pub fn length_prefixed_four_byte_big_endian_prefix_test() {
   |> binary.length_prefixed(prefix_size: 4)
   |> fold.to_list
   |> should.equal([<<99>>])
+}
+
+pub fn length_prefixed_two_byte_prefix_decodes_big_endian_test() {
+  // Length 257 = 0x0101 = <<1, 1>>; payload is 257 bytes.
+  let payload = list.repeat(7, 257)
+  let payload_bits = list.fold(payload, <<>>, fn(acc, b) { <<acc:bits, b>> })
+  from_list([<<<<1, 1>>:bits, payload_bits:bits>>])
+  |> binary.length_prefixed(prefix_size: 2)
+  |> fold.to_list
+  |> should.equal([payload_bits])
+}
+
+pub fn length_prefixed_eight_byte_prefix_small_frame_test() {
+  from_list([<<0, 0, 0, 0, 0, 0, 0, 2, 65, 66>>])
+  |> binary.length_prefixed(prefix_size: 8)
+  |> fold.to_list
+  |> should.equal([<<65, 66>>])
+}
+
+pub fn length_prefixed_prefix_split_across_chunks_test() {
+  // prefix_size = 4, prefix bytes <<0, 0, 0, 1>> spans chunks
+  // [<<0, 0>>, <<0, 1, 99>>]; payload is the trailing 0x63.
+  from_list([<<0, 0>>, <<0, 1, 99>>])
+  |> binary.length_prefixed(prefix_size: 4)
+  |> fold.to_list
+  |> should.equal([<<99>>])
+}
+
+pub fn length_prefixed_multiple_frames_back_to_back_two_byte_prefix_test() {
+  // Three frames of length 1, 2, 3 each with a 2-byte big-endian
+  // prefix, all in a single chunk.
+  from_list([<<0, 1, 65, 0, 2, 66, 67, 0, 3, 68, 69, 70>>])
+  |> binary.length_prefixed(prefix_size: 2)
+  |> fold.to_list
+  |> should.equal([<<65>>, <<66, 67>>, <<68, 69, 70>>])
 }
 
 // --- delimited ----------------------------------------------------------
