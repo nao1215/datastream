@@ -124,6 +124,99 @@ pub fn main() {
 }
 ```
 
+### Resource-backed stream
+
+`source.resource` opens once on the first pull, calls `next` for each
+element, and runs `close` exactly once on every termination path
+(normal end, downstream early-exit via `take`, fold short-circuit,
+`sink.try_each` failure).
+
+```gleam
+import datastream.{Done, Next}
+import datastream/fold
+import datastream/source
+import datastream/stream
+import gleam/io
+
+pub fn main() {
+  // A toy resource: a counter that yields 1, 2, 3 then halts.
+  // `open` returns the initial state; `next` advances it; `close`
+  // would release a real handle (file, socket, cursor).
+  let stream =
+    source.resource(
+      open: fn() {
+        io.println("open")
+        1
+      },
+      next: fn(n) {
+        case n > 3 {
+          True -> Done
+          False -> Next(element: n, state: n + 1)
+        }
+      },
+      close: fn(_state) { io.println("close") },
+    )
+
+  // Take only the first element. `close` still runs because of the
+  // early-exit contract.
+  stream
+  |> stream.take(up_to: 1)
+  |> fold.to_list
+  |> io.debug
+  // open
+  // close
+  // [1]
+}
+```
+
+### Bounded parallel map (BEAM)
+
+```gleam
+import datastream/erlang/par
+import datastream/fold
+import datastream/source
+import datastream/stream
+import gleam/io
+
+pub fn main() {
+  source.iterate(from: 1, with: fn(x) { x + 1 })
+  |> par.map_unordered(with: fn(x) { x * x })
+  |> stream.take(up_to: 5)
+  |> fold.to_list
+  |> io.debug
+  // [1, 4, 9, 16, 25]   (or any permutation; map_unordered emits as workers finish)
+}
+```
+
+For deterministic order use `par.map_ordered` (input order preserved
+at the cost of a small reorder buffer). Tune concurrency with
+`par.map_unordered_with(over:, with:, max_workers:, max_buffer:)`.
+
+### Time-bucketed stream (BEAM)
+
+```gleam
+import datastream/chunk
+import datastream/erlang/source as beam_source
+import datastream/erlang/time
+import datastream/fold
+import datastream/stream
+import gleam/io
+import gleam/list
+
+pub fn main() {
+  // Tick every 20 ms; bucket arrivals into 60 ms windows; take the
+  // first window's chunk.
+  beam_source.ticks(every: 20)
+  |> time.window_time(span: 60)
+  |> stream.take(up_to: 1)
+  |> fold.to_list
+  |> list.flat_map(chunk.to_list)
+  |> list.length
+  |> io.debug
+  // 3   (approximately — three ticks land in one 60 ms window)
+}
+```
+
 ## Module guide
 
 - `datastream`: defines `Stream(a)` and `Step(a, state)`
