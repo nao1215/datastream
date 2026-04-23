@@ -159,22 +159,10 @@ fn drop_while_pull(
     Next(element, rest) ->
       case predicate(element) {
         True -> drop_while_pull(rest, predicate)
-        False -> Next(element, identity(rest))
+        False -> Next(element, rest)
       }
     Done -> Done
   }
-}
-
-fn identity(stream: Stream(a)) -> Stream(a) {
-  datastream.make(
-    pull: fn() {
-      case datastream.pull(stream) {
-        Next(element, rest) -> Next(element, identity(rest))
-        Done -> Done
-      }
-    },
-    close: fn() { datastream.close(stream) },
-  )
 }
 
 /// Yield all of `first`, then all of `second`. If `first` is infinite,
@@ -198,7 +186,7 @@ fn append_pull(first: Stream(a), second: Stream(a)) -> Step(a, Stream(a)) {
 
 fn append_pull_second(stream: Stream(a)) -> Step(a, Stream(a)) {
   case datastream.pull(stream) {
-    Next(element, rest) -> Next(element, identity(rest))
+    Next(element, rest) -> Next(element, rest)
     Done -> Done
   }
 }
