@@ -86,3 +86,10 @@ thrown_away_error = "off"
 "src/datastream/binary.gleam" = [
   "avoid_panic",
 ]
+# `par.map_*` reject `max_workers < 1`, `max_buffer < 1`, and
+# `max_buffer < max_workers` for `map_ordered` with `panic` per
+# spec #20: the only sensible response to a programmer error like
+# `max_workers = 0` is to crash.
+"src/datastream/erlang/par.gleam" = [
+  "avoid_panic",
+]
