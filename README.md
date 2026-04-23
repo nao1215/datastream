@@ -31,6 +31,23 @@ API reference: <https://hexdocs.pm/datastream>
 - On Erlang, work with subjects, timers, and bounded parallelism through
   `datastream/erlang/*`
 
+## When to use
+
+Reach for `datastream` when:
+
+- The input is large or unbounded and shouldn't fit in memory all at
+  once.
+- A pipeline wraps a real resource (file handle, socket, cursor) that
+  must be released on every termination path.
+- You need built-in back-pressure for parallel `map` / `each` on
+  Erlang (`datastream/erlang/par`).
+- You need chunk-boundary-aware framing for byte or text protocols
+  (`datastream/text`, `datastream/binary`).
+
+Stick with `gleam/list` when the input already fits in memory and you
+don't need lazy pulls, repeatable runs, or resource cleanup. `List`
+is simpler and faster for the small-finite case.
+
 ## Examples
 
 Each example below is a complete `src/app.gleam` you can paste in
