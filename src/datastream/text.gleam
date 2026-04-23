@@ -31,6 +31,13 @@ pub fn lines(over stream: Stream(String)) -> Stream(String) {
   lines_active(stream, "", False)
 }
 
+fn maybe_close(source: Stream(a), source_drained: Bool) -> Nil {
+  case source_drained {
+    True -> Nil
+    False -> datastream.close(source)
+  }
+}
+
 fn lines_active(
   source: Stream(String),
   buffer: String,
@@ -38,12 +45,7 @@ fn lines_active(
 ) -> Stream(String) {
   datastream.make(
     pull: fn() { lines_pull(source, buffer, source_drained) },
-    close: fn() {
-      case source_drained {
-        True -> Nil
-        False -> datastream.close(source)
-      }
-    },
+    close: fn() { maybe_close(source, source_drained) },
   )
 }
 
@@ -171,12 +173,7 @@ fn graphemes_active(
 ) -> Stream(String) {
   datastream.make(
     pull: fn() { graphemes_pull(source, pending, source_drained) },
-    close: fn() {
-      case source_drained {
-        True -> Nil
-        False -> datastream.close(source)
-      }
-    },
+    close: fn() { maybe_close(source, source_drained) },
   )
 }
 
@@ -225,12 +222,7 @@ fn utf8_decode_active(
 ) -> Stream(Result(String, Nil)) {
   datastream.make(
     pull: fn() { utf8_decode_pull(source, buffer, source_drained) },
-    close: fn() {
-      case source_drained {
-        True -> Nil
-        False -> datastream.close(source)
-      }
-    },
+    close: fn() { maybe_close(source, source_drained) },
   )
 }
 

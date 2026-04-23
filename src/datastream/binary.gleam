@@ -22,6 +22,13 @@ pub fn bytes(over stream: Stream(BitArray)) -> Stream(Int) {
   bytes_active(stream, <<>>, False)
 }
 
+fn maybe_close(source: Stream(a), source_drained: Bool) -> Nil {
+  case source_drained {
+    True -> Nil
+    False -> datastream.close(source)
+  }
+}
+
 fn bytes_active(
   source: Stream(BitArray),
   buffer: BitArray,
@@ -29,12 +36,7 @@ fn bytes_active(
 ) -> Stream(Int) {
   datastream.make(
     pull: fn() { bytes_pull(source, buffer, source_drained) },
-    close: fn() {
-      case source_drained {
-        True -> Nil
-        False -> datastream.close(source)
-      }
-    },
+    close: fn() { maybe_close(source, source_drained) },
   )
 }
 
@@ -90,12 +92,7 @@ fn length_prefixed_active(
     pull: fn() {
       length_prefixed_pull(source, buffer, prefix_size, source_drained)
     },
-    close: fn() {
-      case source_drained {
-        True -> Nil
-        False -> datastream.close(source)
-      }
-    },
+    close: fn() { maybe_close(source, source_drained) },
   )
 }
 
@@ -184,12 +181,7 @@ fn delimited_active(
     pull: fn() {
       delimited_pull(source, buffer, delimiter, source_drained, has_seen_input)
     },
-    close: fn() {
-      case source_drained {
-        True -> Nil
-        False -> datastream.close(source)
-      }
-    },
+    close: fn() { maybe_close(source, source_drained) },
   )
 }
 
@@ -294,12 +286,7 @@ fn fixed_size_active(
 ) -> Stream(BitArray) {
   datastream.make(
     pull: fn() { fixed_size_pull(source, buffer, size, source_drained) },
-    close: fn() {
-      case source_drained {
-        True -> Nil
-        False -> datastream.close(source)
-      }
-    },
+    close: fn() { maybe_close(source, source_drained) },
   )
 }
 
