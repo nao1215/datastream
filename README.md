@@ -118,9 +118,9 @@ pub fn main() {
 - `datastream/text`: chunk-aware text helpers
 - `datastream/binary`: chunk-aware byte and framing helpers
 - `datastream/dataprep`: helpers for `Validated`
-- `datastream/erlang/source`: BEAM-only subject and timer sources
+- `datastream/erlang/source`: BEAM-only subject / timer sources and per-element `timeout`
 - `datastream/erlang/sink`: BEAM-only subject sink
-- `datastream/erlang/par`: BEAM-only bounded parallel combinators
+- `datastream/erlang/par`: BEAM-only bounded parallel combinators and `race`
 - `datastream/erlang/time`: BEAM-only time-based combinators
 
 ## Target support

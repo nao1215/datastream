@@ -21,7 +21,7 @@
 ////
 //// | function | behaviour |
 //// |----------|-----------|
-//// | `map_unordered` | new dispatch is paused; in-flight workers finish |
+//// | `map_unordered` | bound collapses to `max_workers` (results emit on receive); new dispatch is paused |
 //// | `map_ordered`   | new dispatch is paused; pending dict + workers cap |
 //// | `merge`         | per-worker `Continue` ack is withheld; workers wait |
 ////
@@ -223,11 +223,11 @@ fn map_unordered_step(
 
 @target(erlang)
 fn dispatch_unordered(state: MapUnordered(a, b)) -> MapUnordered(a, b) {
-  case
-    state.source_drained
-    || state.workers_busy >= state.max_workers
-    || state.workers_busy >= state.max_buffer
-  {
+  // The `workers_busy >= max_buffer` check is implied by
+  // `workers_busy >= max_workers` together with the validated
+  // `max_buffer >= max_workers`, so it is intentionally not duplicated
+  // here.
+  case state.source_drained || state.workers_busy >= state.max_workers {
     True -> state
     False ->
       case datastream.pull(state.source) {
