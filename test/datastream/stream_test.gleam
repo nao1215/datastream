@@ -1,6 +1,8 @@
 import datastream.{Done, Next}
 import datastream/fold
+import datastream/source
 import datastream/stream
+import gleam/option.{None, Some}
 import gleeunit
 import gleeunit/should
 
@@ -185,4 +187,159 @@ pub fn map_invokes_callback_once_per_element_on_terminal_test() {
     |> stream.map(with: fn(x) { x + 100 })
 
   pipeline |> fold.to_list |> should.equal([101, 102, 103])
+}
+
+pub fn filter_map_keeps_some_drops_none_test() {
+  from_list([1, 2, 3])
+  |> stream.filter_map(with: fn(x) {
+    case x > 1 {
+      True -> Some(x * 10)
+      False -> None
+    }
+  })
+  |> fold.to_list
+  |> should.equal([20, 30])
+}
+
+pub fn filter_map_on_empty_yields_empty_test() {
+  from_list([])
+  |> stream.filter_map(with: fn(x) { Some(x) })
+  |> fold.to_list
+  |> should.equal([])
+}
+
+pub fn flat_map_concatenates_inner_streams_test() {
+  from_list([1, 2, 3])
+  |> stream.flat_map(with: fn(x) { from_list([x, x]) })
+  |> fold.to_list
+  |> should.equal([1, 1, 2, 2, 3, 3])
+}
+
+pub fn flat_map_with_all_empty_inners_yields_empty_test() {
+  from_list([1, 2])
+  |> stream.flat_map(with: fn(_) { source.empty() })
+  |> fold.to_list
+  |> should.equal([])
+}
+
+pub fn flatten_concatenates_inner_streams_test() {
+  from_list([from_list([1]), from_list([2, 3])])
+  |> stream.flatten
+  |> fold.to_list
+  |> should.equal([1, 2, 3])
+}
+
+pub fn flatten_is_observationally_flat_map_identity_test() {
+  let direct =
+    from_list([from_list([1, 2]), from_list([]), from_list([3])])
+    |> stream.flatten
+    |> fold.to_list
+  let via_flat_map =
+    from_list([from_list([1, 2]), from_list([]), from_list([3])])
+    |> stream.flat_map(with: fn(s) { s })
+    |> fold.to_list
+  direct |> should.equal(via_flat_map)
+}
+
+pub fn concat_walks_streams_in_list_order_test() {
+  stream.concat([from_list([1]), from_list([2, 3]), from_list([4])])
+  |> fold.to_list
+  |> should.equal([1, 2, 3, 4])
+}
+
+pub fn concat_of_empty_list_yields_empty_test() {
+  stream.concat([]) |> fold.to_list |> should.equal([])
+}
+
+pub fn scan_emits_running_accumulator_test() {
+  from_list([1, 2, 3, 4])
+  |> stream.scan(from: 0, with: fn(acc, x) { acc + x })
+  |> fold.to_list
+  |> should.equal([1, 3, 6, 10])
+}
+
+pub fn scan_does_not_emit_seed_on_empty_input_test() {
+  from_list([])
+  |> stream.scan(from: 0, with: fn(acc, x) { acc + x })
+  |> fold.to_list
+  |> should.equal([])
+}
+
+pub fn map_accum_threads_state_and_emits_output_test() {
+  from_list([10, 20, 30])
+  |> stream.map_accum(from: 0, with: fn(acc, x) {
+    let s = acc + x
+    #(s, s)
+  })
+  |> fold.to_list
+  |> should.equal([10, 30, 60])
+}
+
+pub fn zip_pairs_until_either_halts_test() {
+  stream.zip(from_list([1, 2, 3]), from_list(["a", "b"]))
+  |> fold.to_list
+  |> should.equal([#(1, "a"), #(2, "b")])
+}
+
+pub fn zip_with_empty_left_yields_empty_test() {
+  stream.zip(from_list([]), from_list([1, 2]))
+  |> fold.to_list
+  |> should.equal([])
+}
+
+pub fn zip_with_combiner_test() {
+  stream.zip_with(from_list([1, 2, 3]), from_list([10, 20, 30]), with: fn(a, b) {
+    a + b
+  })
+  |> fold.to_list
+  |> should.equal([11, 22, 33])
+}
+
+pub fn intersperse_inserts_separator_between_elements_test() {
+  from_list([1, 2, 3])
+  |> stream.intersperse(with: 0)
+  |> fold.to_list
+  |> should.equal([1, 0, 2, 0, 3])
+}
+
+pub fn intersperse_on_empty_yields_empty_test() {
+  from_list([])
+  |> stream.intersperse(with: 0)
+  |> fold.to_list
+  |> should.equal([])
+}
+
+pub fn intersperse_on_singleton_unchanged_test() {
+  from_list([1])
+  |> stream.intersperse(with: 0)
+  |> fold.to_list
+  |> should.equal([1])
+}
+
+pub fn tap_re_emits_elements_unchanged_test() {
+  from_list([1, 2, 3])
+  |> stream.tap(with: fn(_) { Nil })
+  |> fold.to_list
+  |> should.equal([1, 2, 3])
+}
+
+pub fn dedupe_adjacent_collapses_runs_test() {
+  from_list([1, 1, 2, 2, 2, 3, 1])
+  |> stream.dedupe_adjacent
+  |> fold.to_list
+  |> should.equal([1, 2, 3, 1])
+}
+
+pub fn dedupe_adjacent_on_empty_yields_empty_test() {
+  from_list([])
+  |> stream.dedupe_adjacent
+  |> fold.to_list
+  |> should.equal([])
+}
+
+pub fn dedupe_adjacent_keeps_non_adjacent_duplicates_test() {
+  from_list([1, 2, 1, 2, 1])
+  |> stream.dedupe_adjacent
+  |> fold.to_list
+  |> should.equal([1, 2, 1, 2, 1])
 }
