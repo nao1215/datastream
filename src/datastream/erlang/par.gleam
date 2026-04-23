@@ -150,10 +150,14 @@ pub fn map_unordered(over stream: Stream(a), with f: fn(a) -> b) -> Stream(b) {
 /// Results are emitted in the order they finish, NOT input order.
 ///
 /// `max_workers >= 1` and `max_buffer >= max_workers` are required;
-/// violations `panic` at construction. Because `map_unordered` emits
-/// each result the moment it arrives, `in_flight = workers_busy`, and
-/// `max_buffer` only adds a ceiling redundant with `max_workers`. The
-/// argument is kept for symmetry with `map_ordered` and `merge`.
+/// violations `panic` at construction. The `max_buffer >= max_workers`
+/// rule is enforced uniformly across `par.*` so callers can swap
+/// between `map_unordered_with`, `map_ordered_with`, and `merge_with`
+/// without re-tuning. Note however that `map_unordered` emits each
+/// result the moment it arrives, so `in_flight = workers_busy` and
+/// `max_buffer` adds no extra ceiling beyond `max_workers` here. See
+/// `default_max_workers` and `default_max_buffer` for sensible
+/// starting values.
 pub fn map_unordered_with(
   over stream: Stream(a),
   with f: fn(a) -> b,
