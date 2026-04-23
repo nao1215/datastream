@@ -384,13 +384,17 @@ pub fn race(streams streams: List(Stream(a))) -> Stream(a) {
 @target(erlang)
 fn race_with(streams: List(Stream(a))) -> Stream(a) {
   let result_subject = process.new_subject()
+  let total = list.length(streams)
   list.index_map(streams, fn(stream, idx) {
     let subj = result_subject
     let _pid =
       process.spawn_unlinked(fn() { race_first_pull(stream, idx, subj) })
     Nil
   })
-  source.unfold(from: RaceWaiting(streams, result_subject), with: race_step)
+  source.unfold(
+    from: RaceWaiting(streams, total, result_subject),
+    with: race_step,
+  )
 }
 
 @target(erlang)
@@ -408,27 +412,30 @@ fn race_first_pull(
 
 @target(erlang)
 type RaceState(a) {
-  RaceWaiting(streams: List(Stream(a)), subj: Subject(RaceMsg(a)))
+  RaceWaiting(
+    streams: List(Stream(a)),
+    remaining: Int,
+    subj: Subject(RaceMsg(a)),
+  )
   RaceWinning(stream: Stream(a))
-  RaceFinished
 }
 
 @target(erlang)
 fn race_step(state: RaceState(a)) -> datastream.Step(a, RaceState(a)) {
   case state {
-    RaceFinished -> Done
     RaceWinning(stream) ->
       case datastream.pull(stream) {
         Next(element, rest) -> Next(element, RaceWinning(rest))
         Done -> Done
       }
-    RaceWaiting(streams, subj) ->
+    RaceWaiting(_, 0, _) -> Done
+    RaceWaiting(streams, remaining, subj) ->
       case process.receive_forever(from: subj) {
         RaceNext(index, element, rest) -> {
           close_losers(streams, index)
           Next(element, RaceWinning(rest))
         }
-        RaceDone(_index) -> race_step(RaceWaiting(streams, subj))
+        RaceDone(_) -> race_step(RaceWaiting(streams, remaining - 1, subj))
       }
   }
 }
