@@ -70,3 +70,10 @@ thrown_away_error = "off"
   "short_variable_name",
   "unused_exports",
 ]
+# `binary.length_prefixed` and `binary.fixed_size` reject malformed
+# arguments with `panic` at construction time per the spec (#16): the
+# only sensible response to a programmer error like `prefix_size = 3`
+# is to crash, so callers can't quietly trust a bogus framing.
+"src/datastream/binary.gleam" = [
+  "avoid_panic",
+]
