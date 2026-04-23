@@ -12,6 +12,7 @@
 
 import datastream.{type Step, type Stream, Done, Next}
 import gleam/bit_array
+import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/string
 
@@ -54,7 +55,7 @@ fn lines_pull(
   buffer: String,
   source_drained: Bool,
 ) -> Step(String, Stream(String)) {
-  case extract_line(buffer, "", source_drained) {
+  case extract_line(buffer, source_drained) {
     Some(#(line, rest)) ->
       Next(line, lines_active(source, rest, source_drained))
     None ->
@@ -76,35 +77,46 @@ fn lines_pull(
 
 fn extract_line(
   remaining: String,
-  acc: String,
+  source_drained: Bool,
+) -> Option(#(String, String)) {
+  do_extract_line(remaining, [], source_drained)
+}
+
+fn do_extract_line(
+  remaining: String,
+  acc: List(String),
   source_drained: Bool,
 ) -> Option(#(String, String)) {
   case string.pop_grapheme(remaining) {
     Error(_) -> None
     Ok(#(g, rest)) ->
       case g {
-        "\n" -> Some(#(acc, rest))
-        "\r\n" -> Some(#(acc, rest))
+        "\n" -> Some(#(reverse_concat(acc), rest))
+        "\r\n" -> Some(#(reverse_concat(acc), rest))
         "\r" -> handle_cr(rest, acc, source_drained)
-        _ -> extract_line(rest, acc <> g, source_drained)
+        _ -> do_extract_line(rest, [g, ..acc], source_drained)
       }
   }
 }
 
 fn handle_cr(
   rest: String,
-  acc: String,
+  acc: List(String),
   source_drained: Bool,
 ) -> Option(#(String, String)) {
   case string.pop_grapheme(rest) {
-    Ok(#("\n", rest_after)) -> Some(#(acc, rest_after))
-    Ok(_) -> Some(#(acc, rest))
+    Ok(#("\n", rest_after)) -> Some(#(reverse_concat(acc), rest_after))
+    Ok(_) -> Some(#(reverse_concat(acc), rest))
     Error(_) ->
       case source_drained {
-        True -> Some(#(acc, ""))
+        True -> Some(#(reverse_concat(acc), ""))
         False -> None
       }
   }
+}
+
+fn reverse_concat(reversed_graphemes: List(String)) -> String {
+  string.concat(list.reverse(reversed_graphemes))
 }
 
 /// Split a stream of strings on `delimiter`, emitting every separated
