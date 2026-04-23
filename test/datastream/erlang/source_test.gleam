@@ -7,6 +7,9 @@
 import datastream
 
 @target(erlang)
+import datastream/erlang/internal/event_log
+
+@target(erlang)
 import datastream/erlang/source as beam_source
 
 @target(erlang)
@@ -104,4 +107,21 @@ pub fn timeout_emits_error_when_upstream_is_too_slow_test() {
   |> beam_source.timeout(within: 50)
   |> fold.to_list
   |> should.equal([Error(Nil)])
+}
+
+@target(erlang)
+pub fn timeout_take_early_exit_closes_upstream_test() {
+  let log = event_log.new_log()
+  let upstream = event_log.counted_resource([1, 2, 3], named: "u", log: log)
+
+  upstream
+  |> beam_source.timeout(within: 100)
+  |> stream.take(up_to: 1)
+  |> fold.to_list
+  |> should.equal([Ok(1)])
+
+  process.sleep(50)
+  let events = event_log.drain(log, within: 50)
+  event_log.count_opens(events) |> should.equal(1)
+  event_log.count_closes(events) |> should.equal(1)
 }

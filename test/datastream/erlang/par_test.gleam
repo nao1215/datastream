@@ -1,6 +1,9 @@
 //// BEAM-only tests for `datastream/erlang/par`.
 
 @target(erlang)
+import datastream/erlang/internal/event_log
+
+@target(erlang)
 import datastream/erlang/par
 
 @target(erlang)
@@ -8,6 +11,12 @@ import datastream/fold
 
 @target(erlang)
 import datastream/source
+
+@target(erlang)
+import datastream/stream
+
+@target(erlang)
+import gleam/erlang/process
 
 @target(erlang)
 import gleam/list
@@ -138,4 +147,76 @@ pub fn race_emitting_first_and_empties_later_yields_emitting_test() {
   par.race(streams: [source.from_list([7, 8]), source.empty(), source.empty()])
   |> fold.to_list
   |> should.equal([7, 8])
+}
+
+// --- close contract ------------------------------------------------------
+
+@target(erlang)
+pub fn merge_take_early_exit_closes_upstreams_test() {
+  let log = event_log.new_log()
+  let a = event_log.counted_resource([1, 2, 3], named: "a", log: log)
+  let b = event_log.counted_resource([4, 5, 6], named: "b", log: log)
+
+  let _result =
+    par.merge(streams: [a, b], max_buffer: 4)
+    |> stream.take(up_to: 1)
+    |> fold.to_list
+
+  process.sleep(100)
+  let events = event_log.drain(log, within: 100)
+  event_log.count_opens(events) |> should.equal(2)
+  event_log.count_closes(events) |> should.equal(2)
+}
+
+@target(erlang)
+pub fn map_unordered_take_early_exit_closes_upstream_test() {
+  let log = event_log.new_log()
+  let upstream = event_log.counted_resource([1, 2, 3, 4], named: "u", log: log)
+
+  let _result =
+    upstream
+    |> par.map_unordered(with: fn(x) { x }, max_workers: 2, max_buffer: 4)
+    |> stream.take(up_to: 1)
+    |> fold.to_list
+
+  process.sleep(50)
+  let events = event_log.drain(log, within: 50)
+  event_log.count_opens(events) |> should.equal(1)
+  event_log.count_closes(events) |> should.equal(1)
+}
+
+@target(erlang)
+pub fn map_ordered_take_early_exit_closes_upstream_test() {
+  let log = event_log.new_log()
+  let upstream = event_log.counted_resource([1, 2, 3, 4], named: "u", log: log)
+
+  let _result =
+    upstream
+    |> par.map_ordered(with: fn(x) { x }, max_workers: 2, max_buffer: 4)
+    |> stream.take(up_to: 1)
+    |> fold.to_list
+
+  process.sleep(50)
+  let events = event_log.drain(log, within: 50)
+  event_log.count_opens(events) |> should.equal(1)
+  event_log.count_closes(events) |> should.equal(1)
+}
+
+@target(erlang)
+pub fn race_winner_take_full_consumption_closes_winner_test() {
+  let log = event_log.new_log()
+  let winner = event_log.counted_resource([1], named: "w", log: log)
+  let loser = source.from_list([2])
+
+  let _result =
+    par.race(streams: [winner, loser])
+    |> fold.to_list
+
+  process.sleep(50)
+  let events = event_log.drain(log, within: 50)
+  // The resource MUST be opened at least once, and every open MUST be
+  // matched by a close.
+  let opens = event_log.count_opens(events)
+  let closes = event_log.count_closes(events)
+  opens |> should.equal(closes)
 }
