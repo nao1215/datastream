@@ -15,6 +15,8 @@
 //// on infinite sources.
 
 import datastream.{type Stream, Done, Next}
+import datastream/chunk.{type Chunk}
+import gleam/list
 import gleam/option.{type Option, None, Some}
 
 /// Apply `f` to every element. Cardinality and order are preserved.
@@ -421,6 +423,155 @@ fn dedupe_step(
         Some(prev) if prev == element -> dedupe_step(#(Some(prev), rest))
         _ -> Next(element: element, state: #(Some(element), rest))
       }
+  }
+}
+
+/// Group adjacent elements into fixed-size chunks.
+///
+/// Each emitted chunk holds at most `size` elements, in source order.
+/// The trailing chunk MAY be smaller than `size` when the source length
+/// is not divisible — callers do not lose data when `length % size != 0`.
+/// `size < 1` is normalised to `1`, matching `gleam/list`'s behaviour
+/// for size-bounded splits.
+///
+/// Lazy: a chunk is only built when the downstream pulls.
+pub fn chunks_of(over stream: Stream(a), into size: Int) -> Stream(Chunk(a)) {
+  let normalised = case size < 1 {
+    True -> 1
+    False -> size
+  }
+  datastream.unfold(
+    from: ChunksActive(buffer: [], count: 0, source: stream),
+    with: fn(state) { chunks_of_step(state, normalised) },
+  )
+}
+
+type ChunksOf(a) {
+  ChunksActive(buffer: List(a), count: Int, source: Stream(a))
+  ChunksDrained
+}
+
+fn chunks_of_step(state: ChunksOf(a), size: Int) -> Step(Chunk(a), ChunksOf(a)) {
+  case state {
+    ChunksDrained -> Done
+    ChunksActive(buffer, count, source) ->
+      case datastream.pull(source) {
+        Done ->
+          case buffer {
+            [] -> Done
+            _ ->
+              Next(
+                element: chunk.from_list(list.reverse(buffer)),
+                state: ChunksDrained,
+              )
+          }
+        Next(element, rest) -> {
+          let new_count = count + 1
+          let new_buffer = [element, ..buffer]
+          case new_count >= size {
+            True ->
+              Next(
+                element: chunk.from_list(list.reverse(new_buffer)),
+                state: ChunksActive(buffer: [], count: 0, source: rest),
+              )
+            False ->
+              chunks_of_step(
+                ChunksActive(buffer: new_buffer, count: new_count, source: rest),
+                size,
+              )
+          }
+        }
+      }
+  }
+}
+
+/// Group consecutive elements that share `key(element)`.
+///
+/// Each emitted `#(k, chunk)` is one maximal run of adjacent elements
+/// with the same key, in source order. Non-adjacent occurrences of the
+/// same key are NOT merged: doing so would require unbounded state.
+///
+/// Lazy: a group is only built when the downstream pulls.
+pub fn group_adjacent(
+  over stream: Stream(a),
+  by key: fn(a) -> k,
+) -> Stream(#(k, Chunk(a))) {
+  datastream.unfold(
+    from: GroupActive(current_key: None, buffer: [], source: stream),
+    with: fn(state) { group_adjacent_step(state, key) },
+  )
+}
+
+type GroupAdjacent(a, k) {
+  GroupActive(current_key: Option(k), buffer: List(a), source: Stream(a))
+  GroupDrained
+}
+
+fn group_adjacent_step(
+  state: GroupAdjacent(a, k),
+  key: fn(a) -> k,
+) -> Step(#(k, Chunk(a)), GroupAdjacent(a, k)) {
+  case state {
+    GroupDrained -> Done
+    GroupActive(current_key, buffer, source) ->
+      case datastream.pull(source) {
+        Done -> group_adjacent_flush(current_key, buffer)
+        Next(element, rest) ->
+          group_adjacent_advance(current_key, buffer, element, rest, key)
+      }
+  }
+}
+
+fn group_adjacent_flush(
+  current_key: Option(k),
+  buffer: List(a),
+) -> Step(#(k, Chunk(a)), GroupAdjacent(a, k)) {
+  case current_key {
+    None -> Done
+    Some(k) ->
+      Next(
+        element: #(k, chunk.from_list(list.reverse(buffer))),
+        state: GroupDrained,
+      )
+  }
+}
+
+fn group_adjacent_advance(
+  current_key: Option(k),
+  buffer: List(a),
+  element: a,
+  rest: Stream(a),
+  key: fn(a) -> k,
+) -> Step(#(k, Chunk(a)), GroupAdjacent(a, k)) {
+  let element_key = key(element)
+  case current_key {
+    None ->
+      group_adjacent_step(
+        GroupActive(
+          current_key: Some(element_key),
+          buffer: [element],
+          source: rest,
+        ),
+        key,
+      )
+    Some(prev_key) if prev_key == element_key ->
+      group_adjacent_step(
+        GroupActive(
+          current_key: Some(element_key),
+          buffer: [element, ..buffer],
+          source: rest,
+        ),
+        key,
+      )
+    Some(prev_key) ->
+      Next(
+        element: #(prev_key, chunk.from_list(list.reverse(buffer))),
+        state: GroupActive(
+          current_key: Some(element_key),
+          buffer: [element],
+          source: rest,
+        ),
+      )
   }
 }
 

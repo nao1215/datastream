@@ -1,8 +1,11 @@
-import datastream.{Done, Next}
+import datastream.{type Stream, Done, Next}
+import datastream/chunk.{type Chunk}
 import datastream/fold
 import datastream/source
 import datastream/stream
+import gleam/list
 import gleam/option.{None, Some}
+import gleam/string
 import gleeunit
 import gleeunit/should
 
@@ -342,4 +345,110 @@ pub fn dedupe_adjacent_keeps_non_adjacent_duplicates_test() {
   |> stream.dedupe_adjacent
   |> fold.to_list
   |> should.equal([1, 2, 1, 2, 1])
+}
+
+fn chunks_to_lists(stream_of_chunks) {
+  stream_of_chunks
+  |> fold.to_list
+  |> list.map(chunk.to_list)
+}
+
+fn groups_to_pairs(
+  stream_of_groups: Stream(#(k, Chunk(a))),
+) -> List(#(k, List(a))) {
+  stream_of_groups
+  |> fold.to_list
+  |> list.map(fn(pair) {
+    let #(key, c) = pair
+    #(key, chunk.to_list(c))
+  })
+}
+
+pub fn chunks_of_emits_full_size_then_remainder_test() {
+  from_list([1, 2, 3, 4, 5])
+  |> stream.chunks_of(into: 2)
+  |> chunks_to_lists
+  |> should.equal([[1, 2], [3, 4], [5]])
+}
+
+pub fn chunks_of_evenly_divisible_test() {
+  from_list([1, 2, 3, 4])
+  |> stream.chunks_of(into: 2)
+  |> chunks_to_lists
+  |> should.equal([[1, 2], [3, 4]])
+}
+
+pub fn chunks_of_on_empty_yields_no_chunks_test() {
+  from_list([])
+  |> stream.chunks_of(into: 3)
+  |> chunks_to_lists
+  |> should.equal([])
+}
+
+pub fn chunks_of_size_larger_than_source_test() {
+  from_list([1, 2, 3])
+  |> stream.chunks_of(into: 99)
+  |> chunks_to_lists
+  |> should.equal([[1, 2, 3]])
+}
+
+pub fn chunks_of_zero_normalises_to_one_test() {
+  from_list([1, 2, 3])
+  |> stream.chunks_of(into: 0)
+  |> chunks_to_lists
+  |> should.equal([[1], [2], [3]])
+}
+
+pub fn chunks_of_negative_normalises_to_one_test() {
+  from_list([1, 2, 3])
+  |> stream.chunks_of(into: -5)
+  |> chunks_to_lists
+  |> should.equal([[1], [2], [3]])
+}
+
+pub fn chunks_of_terminates_on_infinite_source_test() {
+  source.repeat(1)
+  |> stream.chunks_of(into: 2)
+  |> stream.take(up_to: 3)
+  |> chunks_to_lists
+  |> should.equal([[1, 1], [1, 1], [1, 1]])
+}
+
+pub fn group_adjacent_groups_runs_of_equal_test() {
+  from_list([1, 1, 2, 3, 3, 3])
+  |> stream.group_adjacent(by: fn(x) { x })
+  |> groups_to_pairs
+  |> should.equal([#(1, [1, 1]), #(2, [2]), #(3, [3, 3, 3])])
+}
+
+pub fn group_adjacent_by_key_function_test() {
+  let first_char = fn(s: String) -> String {
+    case string.first(s) {
+      Ok(c) -> c
+      Error(_) -> ""
+    }
+  }
+
+  from_list(["apple", "ant", "banana", "bee", "cat"])
+  |> stream.group_adjacent(by: first_char)
+  |> groups_to_pairs
+  |> should.equal([
+    #("a", ["apple", "ant"]),
+    #("b", ["banana", "bee"]),
+    #("c", ["cat"]),
+  ])
+}
+
+pub fn group_adjacent_on_empty_yields_no_groups_test() {
+  from_list([])
+  |> stream.group_adjacent(by: fn(x) { x })
+  |> groups_to_pairs
+  |> should.equal([])
+}
+
+pub fn group_adjacent_does_not_merge_non_adjacent_duplicates_test() {
+  from_list([1, 2, 1])
+  |> stream.group_adjacent(by: fn(x) { x })
+  |> groups_to_pairs
+  |> should.equal([#(1, [1]), #(2, [2]), #(1, [1])])
 }
