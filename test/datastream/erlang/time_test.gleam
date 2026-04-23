@@ -7,6 +7,8 @@
 @target(erlang)
 import datastream/chunk
 @target(erlang)
+import datastream/erlang/internal/event_log
+@target(erlang)
 import datastream/erlang/time as beam_time
 @target(erlang)
 import datastream/fold
@@ -14,6 +16,8 @@ import datastream/fold
 import datastream/source
 @target(erlang)
 import datastream/stream
+@target(erlang)
+import gleam/erlang/process
 @target(erlang)
 import gleam/list
 @target(erlang)
@@ -114,4 +118,40 @@ pub fn window_time_take_one_chunk_via_take_test() {
   |> list.flat_map(chunk.to_list)
   |> list.length
   |> should.equal(5)
+}
+
+// --- close contract ------------------------------------------------------
+
+@target(erlang)
+pub fn debounce_take_early_exit_closes_upstream_test() {
+  let log = event_log.new_log()
+  let upstream = event_log.counted_resource([1, 2, 3], named: "u", log: log)
+
+  let _result =
+    upstream
+    |> beam_time.debounce(quiet_for: 30)
+    |> stream.take(up_to: 1)
+    |> fold.to_list
+
+  process.sleep(100)
+  let events = event_log.drain(log, within: 100)
+  event_log.count_opens(events) |> should.equal(1)
+  event_log.count_closes(events) |> should.equal(1)
+}
+
+@target(erlang)
+pub fn window_time_take_early_exit_closes_upstream_test() {
+  let log = event_log.new_log()
+  let upstream = event_log.counted_resource([1, 2, 3], named: "u", log: log)
+
+  let _result =
+    upstream
+    |> beam_time.window_time(span: 30)
+    |> stream.take(up_to: 1)
+    |> fold.to_list
+
+  process.sleep(100)
+  let events = event_log.drain(log, within: 100)
+  event_log.count_opens(events) |> should.equal(1)
+  event_log.count_closes(events) |> should.equal(1)
 }

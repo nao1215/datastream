@@ -95,8 +95,13 @@ pub fn interval(every period_ms: Int) -> Stream(Nil) {
 /// Implementation: each pull spawns an unlinked worker process that
 /// performs the `datastream.pull` and forwards the step on a
 /// dedicated subject; the parent waits with `process.receive(_,
-/// within: ms)`. The worker may still complete after the deadline —
-/// its result is silently discarded.
+/// within: ms)`. On a deadline trip the abandoned worker may still
+/// complete the `pull` afterwards; its result is silently discarded
+/// and any resource it had partially acquired is left to the BEAM
+/// runtime to reclaim.
+///
+/// Downstream early-exit closes the upstream the next pull would
+/// have read from; an abandoned worker is not waited on.
 ///
 /// **Limitation:** because the pull happens in a different process
 /// than the one that built the upstream, this combinator MUST NOT
@@ -104,9 +109,7 @@ pub fn interval(every period_ms: Int) -> Stream(Nil) {
 /// by its owning process, so the worker would `panic`. Wrap subject
 /// streams with their own application-level timeout instead.
 pub fn timeout(over stream: Stream(a), within ms: Int) -> Stream(Result(a, Nil)) {
-  source.unfold(from: TimeoutActive(stream), with: fn(state) {
-    timeout_step(state, ms)
-  })
+  build_timeout_stream(TimeoutActive(stream), ms)
 }
 
 @target(erlang)
@@ -122,19 +125,37 @@ type TimeoutPull(a) {
 }
 
 @target(erlang)
-fn timeout_step(
+fn build_timeout_stream(
   state: TimeoutState(a),
   ms: Int,
-) -> datastream.Step(Result(a, Nil), TimeoutState(a)) {
+) -> Stream(Result(a, Nil)) {
+  datastream.make(pull: fn() { timeout_pull(state, ms) }, close: fn() {
+    timeout_close(state)
+  })
+}
+
+@target(erlang)
+fn timeout_close(state: TimeoutState(a)) -> Nil {
+  case state {
+    TimeoutDrained -> Nil
+    TimeoutActive(stream) -> datastream.close(stream)
+  }
+}
+
+@target(erlang)
+fn timeout_pull(
+  state: TimeoutState(a),
+  ms: Int,
+) -> datastream.Step(Result(a, Nil), Stream(Result(a, Nil))) {
   case state {
     TimeoutDrained -> Done
     TimeoutActive(stream) -> {
       let result = pull_with_deadline(stream, ms)
       case result {
         Ok(TimeoutNext(element, rest)) ->
-          Next(element: Ok(element), state: TimeoutActive(rest))
+          Next(Ok(element), build_timeout_stream(TimeoutActive(rest), ms))
         Ok(TimeoutDone) -> Done
-        Error(_) -> Next(element: Error(Nil), state: TimeoutDrained)
+        Error(_) -> Next(Error(Nil), build_timeout_stream(TimeoutDrained, ms))
       }
     }
   }
