@@ -42,7 +42,10 @@ pub fn try_each(
     Next(element, rest) ->
       case effect(element) {
         Ok(Nil) -> try_each(over: rest, with: effect)
-        Error(e) -> Error(e)
+        Error(e) -> {
+          datastream.close(rest)
+          Error(e)
+        }
       }
   }
 }
