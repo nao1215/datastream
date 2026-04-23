@@ -8,8 +8,6 @@
 //// This module defines the foundational types every later module builds
 //// on: the opaque pipeline value `Stream(a)` and the pull-result enum
 //// `Step(a, state)`.
-////
-//// See `doc/reference/spec.md` for the full specification.
 
 /// A lazy, pull-based pipeline that yields elements of type `a`.
 ///
