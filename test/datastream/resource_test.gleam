@@ -18,6 +18,12 @@ import datastream/stream
 import gleam/option
 import gleeunit/should
 
+@target(erlang)
+import datastream/binary
+
+@target(erlang)
+import datastream/text
+
 // --- cross-target: behavioural tests ---------------------------------------
 
 fn list_resource(elements: List(a)) {
@@ -549,4 +555,87 @@ pub fn resource_fold_collect_result_closes_once_on_first_error_test() {
   |> should.equal(Error("bad"))
   get_dict("c12_open_cr") |> should.equal(1)
   get_dict("c12_close_cr") |> should.equal(1)
+}
+
+// --- Erlang-only: close contract through chunk-aware combinators --------
+//
+// Each chunk-boundary-aware combinator owns its own close callback that
+// forwards to the wrapped source. These tests catch regressions where
+// the forwarding breaks — a class of bug that per-combinator tests in
+// isolation do not reveal.
+
+@target(erlang)
+pub fn lines_over_resource_take_one_closes_once_test() {
+  reset("c14_open_lines_take")
+  reset("c14_close_lines_take")
+  counted_resource(
+    ["hel", "lo\nwor", "ld\n"],
+    "c14_open_lines_take",
+    "c14_close_lines_take",
+  )
+  |> text.lines
+  |> stream.take(up_to: 1)
+  |> fold.to_list
+  |> should.equal(["hello"])
+  get_dict("c14_open_lines_take") |> should.equal(1)
+  get_dict("c14_close_lines_take") |> should.equal(1)
+}
+
+@target(erlang)
+pub fn lines_over_resource_fold_find_closes_once_test() {
+  reset("c14_open_lines_find")
+  reset("c14_close_lines_find")
+  counted_resource(
+    ["alpha\nbeta\n", "gamma\n"],
+    "c14_open_lines_find",
+    "c14_close_lines_find",
+  )
+  |> text.lines
+  |> fold.find(satisfying: fn(line) { line == "beta" })
+  |> should.equal(option.Some("beta"))
+  get_dict("c14_open_lines_find") |> should.equal(1)
+  get_dict("c14_close_lines_find") |> should.equal(1)
+}
+
+@target(erlang)
+pub fn delimited_over_resource_take_one_closes_once_test() {
+  reset("c14_open_delim")
+  reset("c14_close_delim")
+  counted_resource(
+    [<<65, 0, 66, 0, 67, 0>>],
+    "c14_open_delim",
+    "c14_close_delim",
+  )
+  |> binary.delimited(on: <<0>>)
+  |> stream.take(up_to: 1)
+  |> fold.to_list
+  |> should.equal([<<65>>])
+  get_dict("c14_open_delim") |> should.equal(1)
+  get_dict("c14_close_delim") |> should.equal(1)
+}
+
+@target(erlang)
+pub fn length_prefixed_over_resource_take_one_closes_once_test() {
+  reset("c14_open_lp")
+  reset("c14_close_lp")
+  counted_resource([<<2, 65, 66, 1, 67>>], "c14_open_lp", "c14_close_lp")
+  |> binary.length_prefixed(prefix_size: 1)
+  |> stream.take(up_to: 1)
+  |> fold.to_list
+  |> should.equal([<<65, 66>>])
+  get_dict("c14_open_lp") |> should.equal(1)
+  get_dict("c14_close_lp") |> should.equal(1)
+}
+
+@target(erlang)
+pub fn fixed_size_over_resource_take_one_closes_once_test() {
+  reset("c14_open_fs")
+  reset("c14_close_fs")
+  counted_resource([<<1, 2, 3, 4, 5, 6>>], "c14_open_fs", "c14_close_fs")
+  |> binary.fixed_size(size: 2)
+  |> stream.take(up_to: 1)
+  |> fold.to_list
+  |> should.equal([<<1, 2>>])
+  get_dict("c14_open_fs") |> should.equal(1)
+  get_dict("c14_close_fs") |> should.equal(1)
 }
