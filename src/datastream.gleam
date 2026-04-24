@@ -119,6 +119,32 @@ pub fn resource(
   )
 }
 
+/// Variant of `resource` whose `open` may fail. On `Error(e)` the
+/// stream emits exactly one element produced by `on_open_error(e)`
+/// and halts; `close` is NOT called (no opened state exists). On
+/// `Ok(state)` behaviour follows `resource`.
+///
+/// Internal to the library — exposed publicly via
+/// `source.try_resource`.
+@internal
+pub fn try_resource(
+  open open: fn() -> Result(s, eo),
+  next next: fn(s) -> Step(a, s),
+  close close: fn(s) -> Nil,
+  on_open_error on_open_error: fn(eo) -> a,
+) -> Stream(a) {
+  Stream(
+    pull: fn() {
+      case open() {
+        Ok(state) -> pull_resource(state, next, close)
+        Error(e) ->
+          Next(on_open_error(e), Stream(pull: fn() { Done }, close: noop))
+      }
+    },
+    close: noop,
+  )
+}
+
 fn pull_resource(
   state: s,
   next: fn(s) -> Step(a, s),
