@@ -10,6 +10,13 @@
 //// `process.receive(within: ms)` to wait simultaneously for the next
 //// element and for a timer deadline.
 ////
+//// Every public function in this module is gated on
+//// `@target(erlang)`. On the JavaScript target the module still
+//// compiles, so `import datastream/erlang/time` itself does not fail,
+//// but calling any function fails at the call site. The
+//// `beam_only_marker` constant exists solely to keep the module
+//// non-empty on the JavaScript target.
+////
 //// ## Limitation: incompatible with `from_subject`
 ////
 //// Because every combinator pulls inside a spawned worker process,

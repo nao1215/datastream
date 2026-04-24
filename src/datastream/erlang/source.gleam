@@ -3,8 +3,14 @@
 //// These bridge between Erlang's process / timer primitives and the
 //// cross-target `Stream(a)` value. The cross-target core has no
 //// business knowing about `Subject`, monotonic time, or BEAM timers,
-//// so they live here in `datastream/erlang/source` and never compile
-//// on the JavaScript target.
+//// so they live here in `datastream/erlang/source`.
+////
+//// Every public function in this module is gated on
+//// `@target(erlang)`. On the JavaScript target the module still
+//// compiles, so `import datastream/erlang/source` itself does not
+//// fail, but calling any function fails at the call site. The
+//// `beam_only_marker` constant exists solely to keep the module
+//// non-empty on the JavaScript target.
 
 @target(javascript)
 /// Sentinel value documenting that this module is BEAM-only. Every

@@ -4,6 +4,13 @@
 //// involved, so callers can tell at the import site whether a
 //// pipeline runs in parallel.
 ////
+//// Every public function in this module is gated on
+//// `@target(erlang)`. On the JavaScript target the module still
+//// compiles, so `import datastream/erlang/par` itself does not fail,
+//// but calling any function fails at the call site. The
+//// `beam_only_marker` constant exists solely to keep the module
+//// non-empty on the JavaScript target.
+////
 //// ## Concurrency knobs
 ////
 //// - `max_workers`: degree of parallelism. The maximum number of BEAM
