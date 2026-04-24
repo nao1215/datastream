@@ -125,3 +125,47 @@ pub fn timeout_take_early_exit_closes_upstream_test() {
   event_log.count_opens(events) |> should.equal(1)
   event_log.count_closes(events) |> should.equal(1)
 }
+
+@target(erlang)
+pub fn timeout_passes_periodic_fast_elements_through_test() {
+  // Upstream emits three elements, 20ms apart. A 500ms deadline
+  // never trips, so every element comes through as Ok and the stream
+  // ends normally with Done.
+  source.unfold(from: 0, with: fn(s) {
+    case s >= 3 {
+      True -> datastream.Done
+      False -> {
+        process.sleep(20)
+        datastream.Next(element: s, state: s + 1)
+      }
+    }
+  })
+  |> beam_source.timeout(within: 500)
+  |> fold.to_list
+  |> should.equal([Ok(0), Ok(1), Ok(2)])
+}
+
+@target(erlang)
+pub fn timeout_halts_stream_after_deadline_trip_test() {
+  // A slow upstream takes 200ms to produce one element. With a 50ms
+  // deadline, the first pull trips the deadline. The stream must
+  // halt — the abandoned worker is not retried, even if downstream
+  // requests more elements. `take(up_to: 5)` is satisfied by exactly
+  // one Error(Nil), proving the single-shot halt contract.
+  let slow =
+    source.unfold(from: 0, with: fn(s) {
+      case s {
+        0 -> {
+          process.sleep(200)
+          datastream.Next(element: 99, state: 1)
+        }
+        _ -> datastream.Done
+      }
+    })
+
+  slow
+  |> beam_source.timeout(within: 50)
+  |> stream.take(up_to: 5)
+  |> fold.to_list
+  |> should.equal([Error(Nil)])
+}
