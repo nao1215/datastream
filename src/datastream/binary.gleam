@@ -167,7 +167,7 @@ pub fn delimited(
   over stream: Stream(BitArray),
   on delimiter: BitArray,
 ) -> Stream(BitArray) {
-  delimited_active(stream, <<>>, delimiter, False, False)
+  delimited_active(stream, <<>>, delimiter, False, False, 0)
 }
 
 fn delimited_active(
@@ -176,10 +176,18 @@ fn delimited_active(
   delimiter: BitArray,
   source_drained: Bool,
   has_seen_input: Bool,
+  scan_from: Int,
 ) -> Stream(BitArray) {
   datastream.make(
     pull: fn() {
-      delimited_pull(source, buffer, delimiter, source_drained, has_seen_input)
+      delimited_pull(
+        source,
+        buffer,
+        delimiter,
+        source_drained,
+        has_seen_input,
+        scan_from,
+      )
     },
     close: fn() { maybe_close(source, source_drained) },
   )
@@ -191,8 +199,9 @@ fn delimited_pull(
   delimiter: BitArray,
   source_drained: Bool,
   has_seen_input: Bool,
+  scan_from: Int,
 ) -> Step(BitArray, Stream(BitArray)) {
-  case find_delimiter(buffer, delimiter, 0) {
+  case find_delimiter(buffer, delimiter, scan_from) {
     Ok(pos) -> {
       let delim_size = bit_array.byte_size(delimiter)
       case
@@ -206,7 +215,7 @@ fn delimited_pull(
         Ok(frame), Ok(rest) ->
           Next(
             frame,
-            delimited_active(source, rest, delimiter, source_drained, True),
+            delimited_active(source, rest, delimiter, source_drained, True, 0),
           )
         _, _ -> Done
       }
@@ -227,11 +236,33 @@ fn delimited_pull(
                 delimiter,
                 False,
                 has_seen_input || bit_array.byte_size(chunk) > 0,
+                resume_scan_offset(buffer, delimiter),
               )
             Done ->
-              delimited_pull(source, buffer, delimiter, True, has_seen_input)
+              delimited_pull(
+                source,
+                buffer,
+                delimiter,
+                True,
+                has_seen_input,
+                scan_from,
+              )
           }
       }
+  }
+}
+
+/// Where to resume scanning the new (longer) buffer after appending a
+/// fresh chunk. The previous full scan covered everything except the
+/// last `delim_size - 1` bytes, since a delimiter shorter than that
+/// would already have matched. Backing off by `delim_size - 1` is
+/// enough to catch a delimiter that straddles the chunk boundary.
+fn resume_scan_offset(buffer: BitArray, delimiter: BitArray) -> Int {
+  let delim_size = bit_array.byte_size(delimiter)
+  let buffer_size = bit_array.byte_size(buffer)
+  case buffer_size - delim_size + 1 {
+    n if n > 0 -> n
+    _ -> 0
   }
 }
 
