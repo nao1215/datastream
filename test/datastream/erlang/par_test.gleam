@@ -411,3 +411,42 @@ pub fn merge_with_bounds_in_flight_test() {
   let peak = event_log.peak_concurrent(events, named: "pump")
   { peak <= 2 } |> should.be_true
 }
+
+@target(erlang)
+pub fn merge_with_slow_consumer_does_not_overproduce_test() {
+  // Same setup as above but the consumer pulls slowly. If ack-gating
+  // were broken the workers would race ahead and `peak` would exceed
+  // `max_buffer`. Each pump records its enter/leave so we can compute
+  // the peak in-flight count.
+  let log = event_log.new_log()
+  let make_stream = fn() {
+    source.unfold(from: 1, with: fn(n) { datastream.Next(n, n + 1) })
+    |> stream.map(with: fn(x) {
+      event_log.record_enter(log, named: "pump")
+      process.sleep(5)
+      event_log.record_leave(log, named: "pump")
+      x
+    })
+  }
+  let result =
+    par.merge_with(
+      streams: [
+        make_stream(),
+        make_stream(),
+        make_stream(),
+        make_stream(),
+        make_stream(),
+      ],
+      max_buffer: 2,
+    )
+    // Slow consumer: 15 ms between successive downstream pulls.
+    |> stream.tap(with: fn(_) { process.sleep(15) })
+    |> stream.take(up_to: 15)
+    |> fold.to_list
+  list.length(result) |> should.equal(15)
+
+  process.sleep(150)
+  let events = event_log.drain(log, within: 150)
+  let peak = event_log.peak_concurrent(events, named: "pump")
+  { peak <= 2 } |> should.be_true
+}
