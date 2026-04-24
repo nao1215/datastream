@@ -13,7 +13,6 @@
 import datastream.{type Step, type Stream, Done, Next}
 import gleam/bit_array
 import gleam/list
-import gleam/option.{type Option, None, Some}
 import gleam/string
 
 /// Split a stream of strings into a stream of lines, treating both
@@ -29,7 +28,7 @@ import gleam/string
 /// because the next chunk does not start with `\n`, or because the
 /// stream ended) is treated as a line terminator.
 pub fn lines(over stream: Stream(String)) -> Stream(String) {
-  lines_active(stream, "", False)
+  lines_active(stream, "", [], False, False)
 }
 
 fn maybe_close(source: Stream(a), source_drained: Bool) -> Nil {
@@ -39,13 +38,21 @@ fn maybe_close(source: Stream(a), source_drained: Bool) -> Nil {
   }
 }
 
+/// `pending` accumulates graphemes of the current line in reverse
+/// order across chunk boundaries; `cr_pending` is True iff the
+/// previous chunk ended with a lone `\r` whose `\r\n` vs `\r`
+/// classification needs the next chunk to resolve.
 fn lines_active(
   source: Stream(String),
   buffer: String,
+  pending: List(String),
+  cr_pending: Bool,
   source_drained: Bool,
 ) -> Stream(String) {
   datastream.make(
-    pull: fn() { lines_pull(source, buffer, source_drained) },
+    pull: fn() {
+      lines_pull(source, buffer, pending, cr_pending, source_drained)
+    },
     close: fn() { maybe_close(source, source_drained) },
   )
 }
@@ -53,65 +60,79 @@ fn lines_active(
 fn lines_pull(
   source: Stream(String),
   buffer: String,
+  pending: List(String),
+  cr_pending: Bool,
   source_drained: Bool,
 ) -> Step(String, Stream(String)) {
-  case extract_line(buffer, source_drained) {
-    Some(#(line, rest)) ->
-      Next(line, lines_active(source, rest, source_drained))
-    None ->
+  case scan_line(buffer, pending, cr_pending) {
+    LineFound(line, rest) ->
+      Next(line, lines_active(source, rest, [], False, source_drained))
+    LineExhausted(new_pending, new_cr_pending) ->
       case source_drained {
         True ->
-          case buffer {
-            "" -> Done
-            _ -> Next(buffer, lines_active(source, "", True))
+          case new_pending, new_cr_pending {
+            [], False -> Done
+            _, _ ->
+              Next(
+                reverse_concat(new_pending),
+                lines_active(source, "", [], False, True),
+              )
           }
         False ->
           case datastream.pull(source) {
             Next(chunk, source_rest) ->
-              lines_pull(source_rest, buffer <> chunk, False)
-            Done -> lines_pull(source, buffer, True)
+              lines_pull(source_rest, chunk, new_pending, new_cr_pending, False)
+            Done -> lines_pull(source, "", new_pending, new_cr_pending, True)
           }
       }
   }
 }
 
-fn extract_line(
-  remaining: String,
-  source_drained: Bool,
-) -> Option(#(String, String)) {
-  do_extract_line(remaining, [], source_drained)
+type ScanResult {
+  LineFound(line: String, remaining: String)
+  LineExhausted(pending: List(String), cr_pending: Bool)
 }
 
-fn do_extract_line(
-  remaining: String,
-  acc: List(String),
-  source_drained: Bool,
-) -> Option(#(String, String)) {
+fn scan_line(
+  buffer: String,
+  pending: List(String),
+  cr_pending: Bool,
+) -> ScanResult {
+  case cr_pending {
+    True -> resume_cr(buffer, pending)
+    False -> walk(buffer, pending)
+  }
+}
+
+fn resume_cr(buffer: String, pending: List(String)) -> ScanResult {
+  // The previous chunk ended with a lone `\r`. The line was already
+  // terminated; we just need to consume an immediately following `\n`
+  // so it isn't counted as a separate empty line.
+  case string.pop_grapheme(buffer) {
+    Ok(#("\n", rest_after)) -> LineFound(reverse_concat(pending), rest_after)
+    Ok(_) -> LineFound(reverse_concat(pending), buffer)
+    Error(_) -> LineExhausted(pending, True)
+  }
+}
+
+fn walk(remaining: String, acc: List(String)) -> ScanResult {
   case string.pop_grapheme(remaining) {
-    Error(_) -> None
+    Error(_) -> LineExhausted(acc, False)
     Ok(#(g, rest)) ->
       case g {
-        "\n" -> Some(#(reverse_concat(acc), rest))
-        "\r\n" -> Some(#(reverse_concat(acc), rest))
-        "\r" -> handle_cr(rest, acc, source_drained)
-        _ -> do_extract_line(rest, [g, ..acc], source_drained)
+        "\n" -> LineFound(reverse_concat(acc), rest)
+        "\r\n" -> LineFound(reverse_concat(acc), rest)
+        "\r" -> lookahead_cr(rest, acc)
+        _ -> walk(rest, [g, ..acc])
       }
   }
 }
 
-fn handle_cr(
-  rest: String,
-  acc: List(String),
-  source_drained: Bool,
-) -> Option(#(String, String)) {
+fn lookahead_cr(rest: String, acc: List(String)) -> ScanResult {
   case string.pop_grapheme(rest) {
-    Ok(#("\n", rest_after)) -> Some(#(reverse_concat(acc), rest_after))
-    Ok(_) -> Some(#(reverse_concat(acc), rest))
-    Error(_) ->
-      case source_drained {
-        True -> Some(#(reverse_concat(acc), ""))
-        False -> None
-      }
+    Ok(#("\n", rest_after)) -> LineFound(reverse_concat(acc), rest_after)
+    Ok(_) -> LineFound(reverse_concat(acc), rest)
+    Error(_) -> LineExhausted(acc, True)
   }
 }
 
