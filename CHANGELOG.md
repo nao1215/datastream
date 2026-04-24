@@ -30,7 +30,8 @@ rename this heading to `## [0.1.0] - YYYY-MM-DD` and start a fresh
   operations `chunks_of` and `group_adjacent`.
 - `datastream/fold`: pure terminals — `to_list`, `count`, `first`,
   `last`, `fold`, `reduce`, `drain`, `all`, `any`, `find`,
-  `collect_result`.
+  `sum_int`, `sum_float`, `product_int`, `collect_result`,
+  `partition_result`, `partition_map`.
 - `datastream/sink`: effectful terminals — `each`, `try_each`,
   `println`.
 - `datastream/chunk`: opaque `Chunk(a)` type with `empty`, `singleton`,
