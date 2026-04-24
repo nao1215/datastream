@@ -121,8 +121,9 @@ pub fn resource(
 
 /// Variant of `resource` whose `open` may fail. On `Error(e)` the
 /// stream emits exactly one element produced by `on_open_error(e)`
-/// and halts; `close` is NOT called (no opened state exists). On
-/// `Ok(state)` behaviour follows `resource`.
+/// and halts; `close` is NOT called (no opened state exists, so the
+/// `open` callback is responsible for rolling back any partial
+/// acquisition). On `Ok(state)` behaviour follows `resource`.
 ///
 /// Internal to the library — exposed publicly via
 /// `source.try_resource`.

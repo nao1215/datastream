@@ -150,6 +150,10 @@ pub fn unfold(
 /// emits exactly one of these and halts. `NextError(e)` wraps a
 /// per-element read error returned by `next`; the stream continues
 /// after one of these unless the caller stops it.
+///
+/// Pair with `fold.collect_result` to stop on the first error, or
+/// with `fold.partition_result` to drive the stream to completion
+/// and split successes from errors.
 pub type ResourceError(open_error, next_error) {
   OpenError(open_error)
   NextError(next_error)
@@ -202,6 +206,10 @@ pub fn resource(
 /// Downstream sees a single `Stream(Result(a, ResourceError(o, n)))`,
 /// so `fold.collect_result` and `fold.partition_result` work without
 /// further adaptation.
+///
+/// `open` is responsible for rolling back any partial acquisition
+/// itself: when `open` returns `Error(e)`, the library has no state
+/// to close.
 pub fn try_resource(
   open open: fn() -> Result(state, open_error),
   next next: fn(state) -> Step(Result(a, next_error), state),
