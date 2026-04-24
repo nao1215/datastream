@@ -20,6 +20,16 @@ gleam add datastream
 
 API reference: <https://hexdocs.pm/datastream>
 
+## Target support
+
+- Erlang target: every module in this package
+- JavaScript target: the cross-target core only
+- `datastream/erlang/*` modules are BEAM-only
+- On JavaScript, `datastream` does not provide async streaming I/O
+  adapters. Resolve async I/O outside the library, then feed the data into
+  the core with constructors such as `source.from_list`,
+  `source.from_bit_array`, or `source.once`
+
 ## Use cases
 
 - Build pipelines from lists, ranges, options, results, or custom state
@@ -265,16 +275,6 @@ pub fn main() {
 - `datastream/erlang/sink`: BEAM-only subject sink
 - `datastream/erlang/par`: BEAM-only bounded parallel combinators and `race`
 - `datastream/erlang/time`: BEAM-only time-based combinators
-
-## Target support
-
-- Erlang target: every module in this package
-- JavaScript target: the cross-target core only
-- `datastream/erlang/*` modules are BEAM-only
-- On JavaScript, `datastream` does not provide async streaming I/O
-  adapters. Resolve async I/O outside the library, then feed the data into
-  the core with constructors such as `source.from_list`,
-  `source.from_bit_array`, or `source.once`
 
 ## Semantics
 
