@@ -207,55 +207,16 @@ pub fn try_resource(
   next next: fn(state) -> Step(Result(a, next_error), state),
   close close: fn(state) -> Nil,
 ) -> Stream(Result(a, ResourceError(open_error, next_error))) {
-  datastream.make(
-    pull: fn() { try_resource_first_pull(open, next, close) },
-    close: fn() { Nil },
-  )
-}
-
-fn try_resource_first_pull(
-  open: fn() -> Result(state, open_error),
-  next: fn(state) -> Step(Result(a, next_error), state),
-  close: fn(state) -> Nil,
-) -> Step(
-  Result(a, ResourceError(open_error, next_error)),
-  Stream(Result(a, ResourceError(open_error, next_error))),
-) {
-  case open() {
-    Error(e) ->
-      Next(
-        element: Error(OpenError(e)),
-        state: datastream.make(pull: fn() { Done }, close: fn() { Nil }),
-      )
-    Ok(state) -> try_resource_pull(state, next, close)
-  }
-}
-
-fn try_resource_pull(
-  state: state,
-  next: fn(state) -> Step(Result(a, next_error), state),
-  close: fn(state) -> Nil,
-) -> Step(
-  Result(a, ResourceError(open_error, next_error)),
-  Stream(Result(a, ResourceError(open_error, next_error))),
-) {
-  case next(state) {
-    Done -> {
-      close(state)
-      Done
-    }
-    Next(element, next_state) -> {
-      let lifted = case element {
-        Ok(value) -> Ok(value)
-        Error(e) -> Error(NextError(e))
+  datastream.try_resource(
+    open: open,
+    next: fn(state) {
+      case next(state) {
+        Done -> Done
+        Next(Ok(value), next_state) -> Next(Ok(value), next_state)
+        Next(Error(e), next_state) -> Next(Error(NextError(e)), next_state)
       }
-      Next(
-        element: lifted,
-        state: datastream.make(
-          pull: fn() { try_resource_pull(next_state, next, close) },
-          close: fn() { close(next_state) },
-        ),
-      )
-    }
-  }
+    },
+    close: close,
+    on_open_error: fn(e) { Error(OpenError(e)) },
+  )
 }
