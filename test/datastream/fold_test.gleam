@@ -203,6 +203,22 @@ pub fn collect_result_short_circuits_on_first_error_test() {
   |> should.equal(Error("x"))
 }
 
+pub fn collect_result_does_not_pull_past_first_error_test() {
+  // Element 1 is Error; element 2 would panic if pulled. The absence
+  // of a panic proves collect_result stops driving the stream the
+  // moment it observes the first Error.
+  let stream =
+    datastream.unfold(from: 0, with: fn(s) {
+      case s {
+        0 -> Next(element: Ok(1), state: 1)
+        1 -> Next(element: Error("halt"), state: 2)
+        _ -> panic as "collect_result must stop pulling after first Error"
+      }
+    })
+
+  fold.collect_result(stream) |> should.equal(Error("halt"))
+}
+
 pub fn collect_result_on_empty_returns_ok_empty_test() {
   from_list([])
   |> fold.collect_result
@@ -213,6 +229,15 @@ pub fn partition_result_splits_oks_and_errors_in_order_test() {
   from_list([Ok(1), Error("a"), Ok(2), Error("b")])
   |> fold.partition_result
   |> should.equal(#([1, 2], ["a", "b"]))
+}
+
+pub fn partition_result_visits_elements_after_first_error_test() {
+  // If partition_result short-circuited on the first Error like
+  // collect_result does, Ok(3) would be missing from the oks list.
+  // Its presence proves this reducer is a full-traversal one.
+  from_list([Error("a"), Ok(3)])
+  |> fold.partition_result
+  |> should.equal(#([3], ["a"]))
 }
 
 pub fn partition_map_routes_via_split_test() {
