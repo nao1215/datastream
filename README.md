@@ -212,6 +212,47 @@ pub fn main() {
 }
 ```
 
+### Line-by-line processing over a resource
+
+The common real-world pipeline — open a file or cursor, stream lines,
+filter, release the handle — composes `source.resource` with
+`text.lines` and an early-exit terminal. The close contract releases
+the handle on every termination path, so the example below releases
+the pre-built "handle" regardless of how the downstream ends.
+
+In production, `open` would return a real file handle, `next` would
+call something like `file.read_line(handle)` (on Erlang) and wrap the
+result in `Next(line, handle)` or `Done`, and `close` would release
+the handle. The toy version below uses a list of chunks in place of
+a real handle so the example runs on both targets.
+
+```gleam
+import datastream.{Done, Next}
+import datastream/fold
+import datastream/source
+import datastream/stream
+import datastream/text
+import gleam/io
+
+pub fn main() {
+  source.resource(
+    open: fn() { ["INFO hello\nWARN slow\n", "INFO bye\n"] },
+    next: fn(state) {
+      case state {
+        [] -> Done
+        [head, ..tail] -> Next(element: head, state: tail)
+      }
+    },
+    close: fn(_state) { Nil },
+  )
+  |> text.lines
+  |> stream.take(up_to: 2)
+  |> fold.to_list
+  |> io.debug
+  // ["INFO hello", "WARN slow"]
+}
+```
+
 ### Bounded parallel map (BEAM)
 
 ```gleam
