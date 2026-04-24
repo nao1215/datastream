@@ -450,3 +450,69 @@ pub fn merge_with_slow_consumer_does_not_overproduce_test() {
   let peak = event_log.peak_concurrent(events, named: "pump")
   { peak <= 2 } |> should.be_true
 }
+
+// --- construction-time panics --------------------------------------------
+//
+// `validate_par_args` and `validate_buffer` panic on construction
+// when concurrency knobs are out of range. Catching a Gleam `panic`
+// directly is awkward, but spawning the failing call in an unlinked
+// process and observing that no completion message arrives within a
+// short timeout is sufficient: a panicking process never sends, while
+// a non-panicking call here completes in microseconds.
+
+@target(erlang)
+fn panicked(thunk: fn() -> Nil) -> Bool {
+  let done = process.new_subject()
+  let _pid =
+    process.spawn_unlinked(fn() {
+      thunk()
+      process.send(done, Nil)
+    })
+  case process.receive(from: done, within: 100) {
+    Ok(_) -> False
+    Error(_) -> True
+  }
+}
+
+@target(erlang)
+pub fn map_unordered_with_panics_on_zero_max_workers_test() {
+  let did_panic =
+    panicked(fn() {
+      let _result =
+        par.map_unordered_with(
+          source.from_list([1]),
+          with: fn(x) { x },
+          max_workers: 0,
+          max_buffer: 4,
+        )
+      Nil
+    })
+  did_panic |> should.be_true
+}
+
+@target(erlang)
+pub fn map_ordered_with_panics_on_max_buffer_below_max_workers_test() {
+  let did_panic =
+    panicked(fn() {
+      let _result =
+        par.map_ordered_with(
+          source.from_list([1]),
+          with: fn(x) { x },
+          max_workers: 4,
+          max_buffer: 2,
+        )
+      Nil
+    })
+  did_panic |> should.be_true
+}
+
+@target(erlang)
+pub fn merge_with_panics_on_zero_max_buffer_test() {
+  let did_panic =
+    panicked(fn() {
+      let _result =
+        par.merge_with(streams: [source.from_list([1])], max_buffer: 0)
+      Nil
+    })
+  did_panic |> should.be_true
+}
