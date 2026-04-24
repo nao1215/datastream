@@ -478,7 +478,7 @@ fn panicked(thunk: fn() -> Nil) -> Bool {
 pub fn map_unordered_with_panics_on_zero_max_workers_test() {
   let did_panic =
     panicked(fn() {
-      let _ =
+      let _result =
         par.map_unordered_with(
           source.from_list([1]),
           with: fn(x) { x },
@@ -494,7 +494,7 @@ pub fn map_unordered_with_panics_on_zero_max_workers_test() {
 pub fn map_ordered_with_panics_on_max_buffer_below_max_workers_test() {
   let did_panic =
     panicked(fn() {
-      let _ =
+      let _result =
         par.map_ordered_with(
           source.from_list([1]),
           with: fn(x) { x },
@@ -510,7 +510,8 @@ pub fn map_ordered_with_panics_on_max_buffer_below_max_workers_test() {
 pub fn merge_with_panics_on_zero_max_buffer_test() {
   let did_panic =
     panicked(fn() {
-      let _ = par.merge_with(streams: [source.from_list([1])], max_buffer: 0)
+      let _result =
+        par.merge_with(streams: [source.from_list([1])], max_buffer: 0)
       Nil
     })
   did_panic |> should.be_true
