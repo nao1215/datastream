@@ -39,6 +39,11 @@ pub opaque type Stream(a) {
 /// There is intentionally no `Error` variant: the core does not impose a
 /// failure model. Callers that need errors carry them as element-shaped
 /// values (`Stream(Result(a, e))`, `Stream(Validated(a, e))`, …).
+///
+/// Unlike `Stream(a)`, `Step` is a transparent public type: callers
+/// return `Next` / `Done` from the `next` callback passed to
+/// `source.resource` and `source.try_resource`. The enum shape is
+/// stable from v0.1.0 onward.
 pub type Step(a, state) {
   Next(element: a, state: state)
   Done
