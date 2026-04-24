@@ -5,6 +5,9 @@ import gleam/list
 import gleeunit
 import gleeunit/should
 
+@target(erlang)
+import gleam/erlang/process
+
 pub fn main() -> Nil {
   gleeunit.main()
 }
@@ -200,4 +203,67 @@ pub fn fixed_size_empty_input_yields_no_frames_test() {
   |> binary.fixed_size(size: 2)
   |> fold.to_list
   |> should.equal([])
+}
+
+// --- construction-time panics (Erlang target) ----------------------------
+//
+// `length_prefixed` and `fixed_size` reject malformed knobs at
+// construction time with a panic. These tests pin that contract so a
+// future refactor of the validation path has to update them
+// deliberately. Erlang-only because the panic-detection helper spawns a
+// process; JavaScript has no matching primitive. The validation logic
+// itself is cross-target.
+
+@target(erlang)
+fn panicked(thunk: fn() -> Nil) -> Bool {
+  let done = process.new_subject()
+  let _pid =
+    process.spawn_unlinked(fn() {
+      thunk()
+      process.send(done, Nil)
+    })
+  case process.receive(from: done, within: 100) {
+    Ok(_) -> False
+    Error(_) -> True
+  }
+}
+
+@target(erlang)
+pub fn length_prefixed_panics_on_prefix_size_three_test() {
+  let did_panic =
+    panicked(fn() {
+      let _result = binary.length_prefixed(from_list([<<>>]), prefix_size: 3)
+      Nil
+    })
+  did_panic |> should.be_true
+}
+
+@target(erlang)
+pub fn length_prefixed_panics_on_prefix_size_sixteen_test() {
+  let did_panic =
+    panicked(fn() {
+      let _result = binary.length_prefixed(from_list([<<>>]), prefix_size: 16)
+      Nil
+    })
+  did_panic |> should.be_true
+}
+
+@target(erlang)
+pub fn fixed_size_panics_on_zero_size_test() {
+  let did_panic =
+    panicked(fn() {
+      let _result = binary.fixed_size(from_list([<<>>]), size: 0)
+      Nil
+    })
+  did_panic |> should.be_true
+}
+
+@target(erlang)
+pub fn fixed_size_panics_on_negative_size_test() {
+  let did_panic =
+    panicked(fn() {
+      let _result = binary.fixed_size(from_list([<<>>]), size: -10)
+      Nil
+    })
+  did_panic |> should.be_true
 }
