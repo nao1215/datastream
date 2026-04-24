@@ -156,6 +156,35 @@ pub fn race_emitting_first_and_empties_later_yields_emitting_test() {
   |> should.equal([7, 8])
 }
 
+@target(erlang)
+pub fn race_take_one_from_two_emitting_sources_yields_one_element_test() {
+  // Both sources can emit. Downstream `take(1)` must terminate the
+  // pipeline after exactly one element regardless of which source
+  // won the race.
+  par.race(streams: [
+    source.from_list([1, 2, 3]),
+    source.from_list([10, 20, 30]),
+  ])
+  |> stream.take(up_to: 1)
+  |> fold.count
+  |> should.equal(1)
+}
+
+@target(erlang)
+pub fn race_three_emitting_sources_yields_one_winners_cardinality_test() {
+  // Three sources, each emitting two elements. Exactly one wins; the
+  // winner's full tail comes through. Because the winner is
+  // non-deterministic, the stable assertion is cardinality: the
+  // output length equals the losing choice's emit count (2).
+  par.race(streams: [
+    source.from_list([10, 20]),
+    source.from_list([30, 40]),
+    source.from_list([50, 60]),
+  ])
+  |> fold.count
+  |> should.equal(2)
+}
+
 // --- close contract ------------------------------------------------------
 
 @target(erlang)
