@@ -155,3 +155,47 @@ pub fn window_time_take_early_exit_closes_upstream_test() {
   event_log.count_opens(events) |> should.equal(1)
   event_log.count_closes(events) |> should.equal(1)
 }
+
+// --- emission semantics --------------------------------------------------
+//
+// These tests rely on wall-clock scheduling, so the assertions use
+// loose upper / lower bounds. The numbers are chosen so a normally
+// loaded CI scheduler clears the bound with margin even under jitter.
+
+@target(erlang)
+pub fn throttle_drops_elements_within_same_window_test() {
+  // Five elements arrive ~10 ms apart; a 60 ms window should keep
+  // only the first (and at most one more under bad scheduling).
+  let result =
+    source.from_list([1, 2, 3, 4, 5])
+    |> stream.tap(with: fn(_) { process.sleep(10) })
+    |> beam_time.throttle(every: 60)
+    |> fold.to_list
+  { list.length(result) <= 2 } |> should.be_true
+}
+
+@target(erlang)
+pub fn debounce_emits_only_last_after_silence_test() {
+  // Three elements ~5 ms apart, then upstream Done acts as the
+  // terminating silence. The 30 ms debounce window is well above the
+  // inter-arrival gap, so only the last value should emit.
+  source.from_list([1, 2, 3])
+  |> stream.tap(with: fn(_) { process.sleep(5) })
+  |> beam_time.debounce(quiet_for: 30)
+  |> fold.to_list
+  |> should.equal([3])
+}
+
+@target(erlang)
+pub fn sample_emits_at_least_one_snapshot_test() {
+  // Eight elements ~25 ms apart (~200 ms total). Sampling every
+  // 80 ms over that window should produce at least one snapshot
+  // and at most five.
+  let result =
+    source.from_list([1, 2, 3, 4, 5, 6, 7, 8])
+    |> stream.tap(with: fn(_) { process.sleep(25) })
+    |> beam_time.sample(every: 80)
+    |> fold.to_list
+  let n = list.length(result)
+  { n >= 1 && n <= 5 } |> should.be_true
+}
