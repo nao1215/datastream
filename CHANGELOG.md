@@ -16,8 +16,8 @@ rename this heading to `## [0.1.0] - YYYY-MM-DD` and start a fresh
 #### Cross-target core
 
 - `datastream`: opaque `Stream(a)` type and `Step(a, state)` pull-result
-  enum. Internal constructors `unfold`, `make`, `resource`, and the
-  internal `pull` / `close` operations.
+  enum. Internal constructors `unfold`, `make`, `resource`,
+  `try_resource`, and the internal `pull` / `close` operations.
 - `datastream/source`: stream constructors — `empty`, `once`,
   `from_list`, `from_bit_array`, `from_option`, `from_result`,
   `from_dict`, `range`, `repeat`, `iterate`, `unfold`. Resource-backed
