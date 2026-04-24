@@ -169,6 +169,39 @@ pub fn main() {
 }
 ```
 
+### Resource with fallible open
+
+`source.try_resource` is the variant whose `open` and per-element `next`
+can fail. A failed open emits exactly one `Error(source.OpenError(e))`
+element and halts without calling `close`; per-element failures surface
+as `Error(source.NextError(e))` and do not halt the stream.
+
+```gleam
+import datastream.{Done, Next}
+import datastream/fold
+import datastream/source
+import gleam/io
+
+pub fn main() {
+  let stream =
+    source.try_resource(
+      open: fn() -> Result(Int, String) { Error("not available") },
+      next: fn(n) {
+        case n > 3 {
+          True -> Done
+          False -> Next(element: Ok(n), state: n + 1)
+        }
+      },
+      close: fn(_state) { Nil },
+    )
+
+  stream
+  |> fold.to_list
+  |> io.debug
+  // [Error(OpenError("not available"))]
+}
+```
+
 ### Bounded parallel map (BEAM)
 
 ```gleam
