@@ -211,6 +211,49 @@ pub fn utf8_decode_incomplete_trailing_sequence_at_eof_test() {
   |> should.equal([Error(Nil)])
 }
 
+pub fn utf8_decode_rejects_overlong_two_byte_sequence_test() {
+  // 0xC0 0x80 is an overlong encoding of U+0000 and must be rejected
+  // (RFC 3629). Here 0xC0 is rejected at the lead-byte classification
+  // step (lead < 0xC2), then 0x80 is a lone continuation byte and is
+  // also rejected. Two consecutive Error(Nil) — the decoder does not
+  // swallow the second byte silently.
+  from_list([<<0xC0, 0x80>>])
+  |> text.utf8_decode
+  |> fold.to_list
+  |> should.equal([Error(Nil), Error(Nil)])
+}
+
+pub fn utf8_decode_rejects_invalid_continuation_in_two_byte_sequence_test() {
+  // 0xC2 is a valid 2-byte lead; 0x40 is NOT a valid continuation
+  // (< 0x80). Decoder emits Error and resumes on 0x40 — which is
+  // plain ASCII "@" — so the next output is Ok("@").
+  from_list([<<0xC2, 0x40>>])
+  |> text.utf8_decode
+  |> fold.to_list
+  |> should.equal([Error(Nil), Ok("@")])
+}
+
+pub fn utf8_decode_rejects_invalid_continuation_in_three_byte_sequence_test() {
+  // 0xE0 is a valid 3-byte lead. 0xA0 is a valid first continuation
+  // but 0x40 is not. The decoder must emit Error and resume from
+  // 0x40, which is ASCII "@", then consume 0x61 ("a"). The two
+  // ASCII bytes coalesce into a single Ok("@a").
+  from_list([<<0xE0, 0xA0, 0x40, 0x61>>])
+  |> text.utf8_decode
+  |> fold.to_list
+  |> should.equal([Error(Nil), Ok("@a")])
+}
+
+pub fn utf8_decode_rejects_consecutive_lone_continuation_bytes_test() {
+  // Bytes in [0x80, 0xC2) are never valid as a lead byte. Two of
+  // them in a row produce two separate Error(Nil) — the decoder
+  // does not merge consecutive invalid bytes into a single error.
+  from_list([<<0x80, 0x81>>])
+  |> text.utf8_decode
+  |> fold.to_list
+  |> should.equal([Error(Nil), Error(Nil)])
+}
+
 // --- utf8_encode ----------------------------------------------------------
 
 pub fn utf8_encode_ascii_test() {
