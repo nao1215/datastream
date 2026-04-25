@@ -42,11 +42,6 @@ rename this heading to `## [0.1.0] - YYYY-MM-DD` and start a fresh
 - `datastream/binary`: chunk-aware byte framing — `bytes`,
   `length_prefixed`, `fixed_size`, `delimited`.
 
-The `dataprep` integration is intentionally NOT shipped in this
-release. The core stays free of any validation-library dependency;
-callers who want `Validated`-shaped collection wire it up with their
-own short helper. A separate companion package may follow.
-
 #### BEAM-only extensions (`@target(erlang)`)
 
 - `datastream/erlang/source`: `from_subject` (Subject bridge with
@@ -85,3 +80,10 @@ own short helper. A separate companion package may follow.
   support matrix, semantics summary.
 - `CONTRIBUTING.md` and `SECURITY.md`.
 - Module-level doc comments on every public module.
+
+### Notes
+
+- The `dataprep` integration is intentionally NOT shipped in this
+  release. The core stays free of any validation-library dependency;
+  callers who want `Validated`-shaped collection wire it up with their
+  own short helper. A separate companion package may follow.
