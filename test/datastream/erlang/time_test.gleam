@@ -5,6 +5,8 @@
 //// (counts, ordering, terminal halt) rather than exact timing.
 
 @target(erlang)
+import datastream.{Done, Next}
+@target(erlang)
 import datastream/chunk
 @target(erlang)
 import datastream/erlang/internal/event_log
@@ -118,6 +120,88 @@ pub fn window_time_take_one_chunk_via_take_test() {
   |> list.flat_map(chunk.to_list)
   |> list.length
   |> should.equal(5)
+}
+
+@target(erlang)
+pub fn window_time_groups_close_elements_into_one_chunk_test() {
+  // Two elements 30 ms apart with a 500 ms window. Both arrive
+  // before the deadline trips, and upstream Done flushes the
+  // trailing buffer as a single chunk.
+  let timed =
+    datastream.unfold(from: 0, with: fn(state) {
+      case state {
+        0 -> Next(element: 1, state: 1)
+        1 -> {
+          process.sleep(30)
+          Next(element: 2, state: 2)
+        }
+        _ -> Done
+      }
+    })
+
+  timed
+  |> beam_time.window_time(span: 500)
+  |> fold.to_list
+  |> list.map(chunk.to_list)
+  |> should.equal([[1, 2]])
+}
+
+@target(erlang)
+pub fn window_time_separates_distant_elements_into_different_chunks_test() {
+  // Element 1 at t=0; element 2 at t≈150 ms. With a 100 ms window,
+  // the first deadline trips between them so each element ends up
+  // in its own non-empty chunk. Empty chunks for silent intermediate
+  // windows are tolerated; ordering across all chunks is pinned.
+  let timed =
+    datastream.unfold(from: 0, with: fn(state) {
+      case state {
+        0 -> Next(element: 1, state: 1)
+        1 -> {
+          process.sleep(150)
+          Next(element: 2, state: 2)
+        }
+        _ -> Done
+      }
+    })
+
+  let chunks =
+    timed
+    |> beam_time.window_time(span: 100)
+    |> fold.to_list
+    |> list.map(chunk.to_list)
+
+  list.flatten(chunks) |> should.equal([1, 2])
+  chunks
+  |> list.filter(keeping: fn(c) { c != [] })
+  |> list.length
+  |> should.equal(2)
+}
+
+@target(erlang)
+pub fn window_time_emits_empty_chunk_for_silent_window_test() {
+  // One element at t=0 then a 120 ms silence before upstream Done.
+  // With a 50 ms window, at least one window trips entirely silent
+  // between the first chunk's flush and the trailing Done — the
+  // combinator must emit it as an empty chunk.
+  let timed =
+    datastream.unfold(from: 0, with: fn(state) {
+      case state {
+        0 -> Next(element: 1, state: 1)
+        1 -> {
+          process.sleep(120)
+          Done
+        }
+        _ -> Done
+      }
+    })
+
+  let chunks =
+    timed
+    |> beam_time.window_time(span: 50)
+    |> fold.to_list
+    |> list.map(chunk.to_list)
+
+  list.any(chunks, fn(c) { c == [] }) |> should.be_true
 }
 
 // --- close contract ------------------------------------------------------
