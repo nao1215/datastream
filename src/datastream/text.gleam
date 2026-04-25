@@ -15,8 +15,9 @@ import gleam/bit_array
 import gleam/list
 import gleam/string
 
-/// Split a stream of strings into a stream of lines, treating both
-/// `\n` and `\r\n` as terminators.
+/// Split a stream of strings into a stream of lines, treating `\n`,
+/// `\r\n`, and lone `\r` as terminators (matching Python's
+/// `str.splitlines()`).
 ///
 /// The terminator is NOT included in emitted lines. A trailing partial
 /// line (input that does not end with a terminator) is emitted as a
