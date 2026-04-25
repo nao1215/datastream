@@ -7,9 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-The entire 0.1.0 surface lives here pending tag. When 0.1.0 is cut,
-rename this heading to `## [0.1.0] - YYYY-MM-DD` and start a fresh
-`## [Unreleased]` block above it.
+_No changes yet._
+
+## [0.1.0] - 2026-04-25
 
 ### Added
 
