@@ -134,6 +134,50 @@ pub fn main() {
 }
 ```
 
+### Use with dataprep
+
+`datastream` does not depend on `dataprep`. Adding it (`gleam add
+dataprep`) and combining `fold.fold` with a small applicative
+`combine` step accumulates every per-element error in a single pass —
+the right tool when reporting all failures matters more than stopping
+on the first one.
+
+```gleam
+import dataprep/non_empty_list
+import dataprep/validated.{type Validated, Invalid, Valid}
+import datastream/fold
+import datastream/source
+import gleam/io
+
+pub fn main() {
+  source.from_list([
+    Valid(1),
+    Invalid(non_empty_list.single("row 2 bad")),
+    Valid(3),
+    Invalid(non_empty_list.single("row 4 bad")),
+  ])
+  |> fold.fold(from: Valid([]), with: combine)
+  |> io.debug
+  // Invalid(NonEmptyList("row 2 bad", ["row 4 bad"]))
+}
+
+fn combine(
+  acc: Validated(List(Int), String),
+  next: Validated(Int, String),
+) -> Validated(List(Int), String) {
+  case acc, next {
+    Valid(xs), Valid(x) -> Valid([x, ..xs])
+    Valid(_), Invalid(es) -> Invalid(es)
+    Invalid(es), Valid(_) -> Invalid(es)
+    Invalid(a), Invalid(b) -> Invalid(non_empty_list.append(a, b))
+  }
+}
+```
+
+For the simpler short-circuit case use `fold.collect_result` /
+`fold.partition_result` on `Stream(Result(a, e))` instead — `Validated`
+is for accumulating every error, not stopping on the first.
+
 ### Resource-backed stream
 
 `source.resource` opens once on the first pull, calls `next` for each
