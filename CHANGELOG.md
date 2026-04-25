@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-04-25
+
 ### Changed
 
 - **BREAKING**: `source.from_bit_array` now panics at construction
@@ -47,6 +49,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - `datastream` module-level "Invalid-argument policy" section
   documenting the unified `panic`-on-bad-arg contract referenced
   from per-function docstrings.
+
+### Documentation
+
+- `text.lines` opening sentence now lists `\n`, `\r\n`, and lone
+  `\r` as terminators (matching the actual behaviour and Python's
+  `str.splitlines()`). The chunk-boundary paragraph already
+  described this; only the opening summary was out of date. (#146)
 
 ## [0.1.1] - 2026-04-25
 
