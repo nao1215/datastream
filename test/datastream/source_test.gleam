@@ -9,6 +9,9 @@ import gleam/string
 import gleeunit
 import gleeunit/should
 
+@target(erlang)
+import gleam/erlang/process
+
 pub fn main() -> Nil {
   gleeunit.main()
 }
@@ -182,4 +185,47 @@ pub fn from_bit_array_is_repeatable_test() {
   let s = source.from_bit_array(<<10, 20>>)
   fold.to_list(s) |> should.equal([10, 20])
   fold.to_list(s) |> should.equal([10, 20])
+}
+
+// --- construction-time panics (Erlang target) ----------------------------
+//
+// `from_bit_array` rejects non-byte-aligned input at construction time
+// with a panic per #144. These tests pin that contract so a future
+// refactor of the validation path has to update them deliberately.
+// Erlang-only because the panic-detection helper spawns a process;
+// JavaScript has no matching primitive. The validation logic itself is
+// cross-target.
+
+@target(erlang)
+fn panicked(thunk: fn() -> Nil) -> Bool {
+  let done = process.new_subject()
+  let _pid =
+    process.spawn_unlinked(fn() {
+      thunk()
+      process.send(done, Nil)
+    })
+  case process.receive(from: done, within: 100) {
+    Ok(_) -> False
+    Error(_) -> True
+  }
+}
+
+@target(erlang)
+pub fn from_bit_array_panics_on_sub_byte_input_test() {
+  let did_panic =
+    panicked(fn() {
+      let _result = source.from_bit_array(<<7:size(3)>>)
+      Nil
+    })
+  did_panic |> should.be_true
+}
+
+@target(erlang)
+pub fn from_bit_array_panics_on_partial_trailing_bits_test() {
+  let did_panic =
+    panicked(fn() {
+      let _result = source.from_bit_array(<<5:size(11)>>)
+      Nil
+    })
+  did_panic |> should.be_true
 }

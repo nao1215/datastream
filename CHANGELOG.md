@@ -7,7 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-_No changes yet._
+### Changed
+
+- **BREAKING**: `source.from_bit_array` now panics at construction
+  time when the input `BitArray` is not byte-aligned (its bit length
+  is not a multiple of 8) instead of silently dropping the trailing
+  sub-byte tail. This matches the existing
+  `binary.length_prefixed` / `binary.fixed_size` policy of crashing
+  on programmer error so callers cannot quietly trust corrupted
+  input. (#144)
 
 ## [0.1.1] - 2026-04-25
 
