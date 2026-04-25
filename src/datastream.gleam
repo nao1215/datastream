@@ -8,6 +8,30 @@
 //// This module defines the foundational types every later module builds
 //// on: the opaque pipeline value `Stream(a)` and the pull-result enum
 //// `Step(a, state)`.
+////
+//// ## Invalid-argument policy
+////
+//// Across the library, any `size` / `count` / `prefix_size`
+//// argument that cannot have a meaningful interpretation is rejected
+//// at construction time with a `panic` rather than silently
+//// normalised — silent normalisation produces results that look
+//// plausible but lose information the caller cannot recover. The
+//// per-function docstring states the exact accepted range; the
+//// general rule is:
+////
+//// - A "size" argument that controls how many elements form one
+////   chunk / frame (`stream.chunks_of`, `binary.fixed_size`,
+////   `binary.length_prefixed`'s `prefix_size`) MUST be `>= 1`
+////   (and `prefix_size` is further restricted to `{1, 2, 4, 8}`).
+//// - A "count" argument that says how many elements to take or
+////   drop (`stream.take`, `stream.drop`) MUST be `>= 0`. The `0`
+////   case has a single mathematically natural answer
+////   (the empty stream / the identity respectively) and is
+////   accepted; negative counts are programmer error.
+////
+//// Every violation is a programmer error: the only sensible response
+//// is to crash so a bogus value cannot quietly produce surprising
+//// data downstream.
 
 /// A lazy, pull-based pipeline that yields elements of type `a`.
 ///

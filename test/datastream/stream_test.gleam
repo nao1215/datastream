@@ -9,6 +9,9 @@ import gleam/string
 import gleeunit
 import gleeunit/should
 
+@target(erlang)
+import gleam/erlang/process
+
 pub fn main() -> Nil {
   gleeunit.main()
 }
@@ -72,11 +75,16 @@ pub fn take_zero_yields_empty_test() {
   |> should.equal([])
 }
 
-pub fn take_negative_yields_empty_test() {
-  from_list([1, 2, 3])
-  |> stream.take(up_to: -5)
-  |> fold.to_list
-  |> should.equal([])
+@target(erlang)
+pub fn take_negative_panics_test() {
+  let did_panic =
+    panicked(fn() {
+      let _result =
+        from_list([1, 2, 3])
+        |> stream.take(up_to: -5)
+      Nil
+    })
+  did_panic |> should.be_true
 }
 
 pub fn take_more_than_available_yields_all_test() {
@@ -107,11 +115,16 @@ pub fn drop_zero_is_identity_test() {
   |> should.equal([1, 2, 3])
 }
 
-pub fn drop_negative_is_identity_test() {
-  from_list([1, 2, 3])
-  |> stream.drop(up_to: -5)
-  |> fold.to_list
-  |> should.equal([1, 2, 3])
+@target(erlang)
+pub fn drop_negative_panics_test() {
+  let did_panic =
+    panicked(fn() {
+      let _result =
+        from_list([1, 2, 3])
+        |> stream.drop(up_to: -5)
+      Nil
+    })
+  did_panic |> should.be_true
 }
 
 pub fn drop_more_than_available_yields_empty_test() {
@@ -392,18 +405,28 @@ pub fn chunks_of_size_larger_than_source_test() {
   |> should.equal([[1, 2, 3]])
 }
 
-pub fn chunks_of_zero_normalises_to_one_test() {
-  from_list([1, 2, 3])
-  |> stream.chunks_of(into: 0)
-  |> chunks_to_lists
-  |> should.equal([[1], [2], [3]])
+@target(erlang)
+pub fn chunks_of_zero_panics_test() {
+  let did_panic =
+    panicked(fn() {
+      let _result =
+        from_list([1, 2, 3])
+        |> stream.chunks_of(into: 0)
+      Nil
+    })
+  did_panic |> should.be_true
 }
 
-pub fn chunks_of_negative_normalises_to_one_test() {
-  from_list([1, 2, 3])
-  |> stream.chunks_of(into: -5)
-  |> chunks_to_lists
-  |> should.equal([[1], [2], [3]])
+@target(erlang)
+pub fn chunks_of_negative_panics_test() {
+  let did_panic =
+    panicked(fn() {
+      let _result =
+        from_list([1, 2, 3])
+        |> stream.chunks_of(into: -5)
+      Nil
+    })
+  did_panic |> should.be_true
 }
 
 pub fn chunks_of_terminates_on_infinite_source_test() {
@@ -451,4 +474,27 @@ pub fn group_adjacent_does_not_merge_non_adjacent_duplicates_test() {
   |> stream.group_adjacent(by: fn(x) { x })
   |> groups_to_pairs
   |> should.equal([#(1, [1]), #(2, [2]), #(1, [1])])
+}
+
+// --- construction-time panics (Erlang target) ----------------------------
+//
+// `take`, `drop`, and `chunks_of` reject nonsensical count / size
+// arguments at construction time with a panic per the datastream
+// module-level invalid-argument policy unified in #145. These tests
+// pin that contract. Erlang-only because the panic-detection helper
+// spawns a process; JavaScript has no matching primitive. The
+// validation logic itself is cross-target.
+
+@target(erlang)
+fn panicked(thunk: fn() -> Nil) -> Bool {
+  let done = process.new_subject()
+  let _pid =
+    process.spawn_unlinked(fn() {
+      thunk()
+      process.send(done, Nil)
+    })
+  case process.receive(from: done, within: 100) {
+    Ok(_) -> False
+    Error(_) -> True
+  }
 }
