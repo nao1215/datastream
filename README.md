@@ -1,5 +1,9 @@
 # datastream
 
+[![Hex](https://img.shields.io/hexpm/v/datastream)](https://hex.pm/packages/datastream)
+[![Hex Downloads](https://img.shields.io/hexpm/dt/datastream)](https://hex.pm/packages/datastream)
+[![CI](https://github.com/nao1215/datastream/actions/workflows/ci.yml/badge.svg)](https://github.com/nao1215/datastream/actions/workflows/ci.yml)
+
 `datastream` is a pull-based stream library for Gleam.
 
 It is meant for pipelines that should stay lazy, repeatable, and explicit

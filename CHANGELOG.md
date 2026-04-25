@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 _No changes yet._
 
+## [0.1.1] - 2026-04-25
+
+### Changed
+
+- Release workflow pipes `I am not using semantic versioning` into
+  `gleam publish -y` so the publish step does not stall on the
+  interactive confirmation that Hex requires for non-semver releases.
+- README adds Hex version, Hex download count, and CI status badges.
+
 ## [0.1.0] - 2026-04-25
 
 ### Added
