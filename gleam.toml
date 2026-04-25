@@ -13,18 +13,12 @@ links = [
 # Erlang and JavaScript targets. The cross-target core (`datastream`,
 # `datastream/source`, `datastream/stream`, `datastream/fold`,
 # `datastream/sink`, `datastream/chunk`, `datastream/text`,
-# `datastream/binary`, `datastream/dataprep`) MUST run on both. The
-# `datastream/erlang/*` extension modules are guarded so they only
-# compile on Erlang.
+# `datastream/binary`) MUST run on both. The `datastream/erlang/*`
+# extension modules are guarded so they only compile on Erlang.
 gleam = ">= 1.15.0"
 
 [dependencies]
 gleam_stdlib = ">= 0.44.0 and < 2.0.0"
-# `dataprep` is required by the `datastream/dataprep` integration
-# helpers (#17). Callers who do not import that module never use
-# `dataprep` at runtime; the dependency only exists so the helper
-# module can compile.
-dataprep = ">= 0.2.0 and < 1.0.0"
 # `gleam_erlang` is required by the BEAM-only modules under
 # `datastream/erlang/*` (#18-#21). Every import of it is gated on
 # `@target(erlang)` so the JavaScript build never references it.
