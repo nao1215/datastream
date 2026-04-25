@@ -41,8 +41,11 @@ rename this heading to `## [0.1.0] - YYYY-MM-DD` and start a fresh
   `utf8_decode`, `utf8_encode`.
 - `datastream/binary`: chunk-aware byte framing — `bytes`,
   `length_prefixed`, `fixed_size`, `delimited`.
-- `datastream/dataprep`: optional integration with the upstream
-  validation library — `collect_validated`, `partition_validated`.
+
+The `dataprep` integration is intentionally NOT shipped in this
+release. The core stays free of any validation-library dependency;
+callers who want `Validated`-shaped collection wire it up with their
+own short helper. A separate companion package may follow.
 
 #### BEAM-only extensions (`@target(erlang)`)
 
