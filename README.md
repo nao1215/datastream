@@ -370,3 +370,12 @@ pub fn main() {
   completion and on early exit
 - Errors are carried in the element type, for example
   `Stream(Result(a, e))`
+
+## License
+
+MIT — see [LICENSE](LICENSE).
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup and pull
+request expectations. Bug reports and proposals via GitHub Issues.
