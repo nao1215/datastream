@@ -87,6 +87,14 @@ thrown_away_error = "off"
 "src/datastream/source.gleam" = [
   "avoid_panic",
 ]
+# `stream.take`, `stream.drop`, and `stream.chunks_of` reject
+# nonsensical count / size arguments with `panic` per the
+# datastream module-level invalid-argument policy unified in #145
+# (negative counts, sub-1 chunk sizes). Silent normalisation hides
+# programmer error behind plausible-looking output.
+"src/datastream/stream.gleam" = [
+  "avoid_panic",
+]
 # `par.map_*` reject `max_workers < 1`, `max_buffer < 1`, and
 # `max_buffer < max_workers` for `map_ordered` with `panic` per
 # spec #20: the only sensible response to a programmer error like

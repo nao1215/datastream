@@ -79,7 +79,8 @@ pub type IncompleteFrame {
 /// the next `length` bytes as a frame, wrapped in `Ok`.
 ///
 /// `prefix_size` MUST be one of `{1, 2, 4, 8}`. Other values are
-/// rejected at construction time with a panic.
+/// rejected at construction time with a panic per the `datastream`
+/// module-level invalid-argument policy.
 ///
 /// If the input ends mid-frame (the prefix is shorter than
 /// `prefix_size` bytes, or the payload is shorter than the declared
@@ -360,7 +361,8 @@ fn find_delimiter(
 /// framing combinator cannot emit a frame of fewer than `size` bytes.
 ///
 /// `size` MUST be `>= 1`. Other values are rejected at construction
-/// time with a panic.
+/// time with a panic per the `datastream` module-level
+/// invalid-argument policy.
 pub fn fixed_size(
   over stream: Stream(BitArray),
   size size: Int,

@@ -67,22 +67,34 @@ fn filter_pull(
   }
 }
 
-/// Yield at most the first `n` elements; `n <= 0` yields the empty stream.
+/// Yield at most the first `n` elements; `n == 0` yields the empty
+/// stream.
+///
+/// `n` MUST be `>= 0`. A negative `n` is rejected at construction
+/// time with a panic per the `datastream` module-level
+/// invalid-argument policy.
 ///
 /// Stops pulling upstream the moment the `n`th element has been
 /// emitted, and closes the upstream on that early exit. This is what
 /// makes `take` safe on infinite resource-backed sources.
 pub fn take(from stream: Stream(a), up_to n: Int) -> Stream(a) {
+  case n < 0 {
+    True -> panic as "datastream/stream.take: count must be >= 0"
+    False -> take_active(stream, n)
+  }
+}
+
+fn take_active(stream: Stream(a), n: Int) -> Stream(a) {
   datastream.make(
     pull: fn() {
-      case n <= 0 {
-        True -> {
+      case n {
+        0 -> {
           datastream.close(stream)
           Done
         }
-        False ->
+        _ ->
           case datastream.pull(stream) {
-            Next(element, rest) -> Next(element, take(from: rest, up_to: n - 1))
+            Next(element, rest) -> Next(element, take_active(rest, n - 1))
             Done -> Done
           }
       }
@@ -91,21 +103,32 @@ pub fn take(from stream: Stream(a), up_to n: Int) -> Stream(a) {
   )
 }
 
-/// Discard the first `n` elements; `n <= 0` is the identity.
+/// Discard the first `n` elements; `n == 0` is the identity.
+///
+/// `n` MUST be `>= 0`. A negative `n` is rejected at construction
+/// time with a panic per the `datastream` module-level
+/// invalid-argument policy.
 pub fn drop(from stream: Stream(a), up_to n: Int) -> Stream(a) {
+  case n < 0 {
+    True -> panic as "datastream/stream.drop: count must be >= 0"
+    False -> drop_active(stream, n)
+  }
+}
+
+fn drop_active(stream: Stream(a), n: Int) -> Stream(a) {
   datastream.make(pull: fn() { drop_pull(stream, n) }, close: fn() {
     datastream.close(stream)
   })
 }
 
 fn drop_pull(stream: Stream(a), n: Int) -> Step(a, Stream(a)) {
-  case n <= 0 {
-    True ->
+  case n {
+    0 ->
       case datastream.pull(stream) {
-        Next(element, rest) -> Next(element, drop(from: rest, up_to: 0))
+        Next(element, rest) -> Next(element, drop_active(rest, 0))
         Done -> Done
       }
-    False ->
+    _ ->
       case datastream.pull(stream) {
         Next(_, rest) -> drop_pull(rest, n - 1)
         Done -> Done
@@ -487,14 +510,17 @@ fn dedupe_pull(stream: Stream(a), last: Option(a)) -> Step(a, Stream(a)) {
 
 /// Group adjacent elements into fixed-size chunks.
 ///
-/// `size < 1` is normalised to `1`. The trailing chunk may be smaller
-/// than `size` when the source length is not divisible.
+/// `size` MUST be `>= 1`. A `size < 1` is rejected at construction
+/// time with a panic per the `datastream` module-level
+/// invalid-argument policy.
+///
+/// The trailing chunk may be smaller than `size` when the source
+/// length is not divisible.
 pub fn chunks_of(over stream: Stream(a), into size: Int) -> Stream(Chunk(a)) {
-  let normalised = case size < 1 {
-    True -> 1
-    False -> size
+  case size < 1 {
+    True -> panic as "datastream/stream.chunks_of: size must be >= 1"
+    False -> chunks_active(stream, [], 0, size)
   }
-  chunks_active(stream, [], 0, normalised)
 }
 
 fn chunks_active(

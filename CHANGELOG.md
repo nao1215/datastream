@@ -27,10 +27,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   framed protocol that must reject partial messages. The
   `Stream(Result(_, _))` shape mirrors `text.utf8_decode`. (#147)
 
+- **BREAKING**: `stream.take`, `stream.drop`, and `stream.chunks_of`
+  now panic at construction time on programmer-error arguments
+  instead of silently normalising. Specifically: `take(_, n)` and
+  `drop(_, n)` panic when `n < 0` (the `0` case still yields the
+  empty stream / the identity respectively, since both are
+  mathematically natural); `chunks_of(_, size)` panics when
+  `size < 1` (the previous "normalised to 1" behaviour was hiding
+  the real bug). This unifies the library's invalid-argument policy
+  with `binary.fixed_size` / `binary.length_prefixed` so a user who
+  learns the rule for one function can predict the rest. The new
+  contract is documented in the `datastream` module-level
+  docstring. (#145)
+
 ### Added
 
 - `binary.IncompleteFrame(expected:, got:)` type, surfaced by
   `binary.length_prefixed` on truncated input.
+- `datastream` module-level "Invalid-argument policy" section
+  documenting the unified `panic`-on-bad-arg contract referenced
+  from per-function docstrings.
 
 ## [0.1.1] - 2026-04-25
 
