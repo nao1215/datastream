@@ -622,7 +622,7 @@ pub fn length_prefixed_over_resource_take_one_closes_once_test() {
   |> binary.length_prefixed(prefix_size: 1)
   |> stream.take(up_to: 1)
   |> fold.to_list
-  |> should.equal([<<65, 66>>])
+  |> should.equal([Ok(<<65, 66>>)])
   get_dict("c14_open_lp") |> should.equal(1)
   get_dict("c14_close_lp") |> should.equal(1)
 }

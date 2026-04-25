@@ -112,7 +112,10 @@ pub fn main() {
     |> binary.length_prefixed(prefix_size: 1)
     |> fold.to_list
   io.debug(frames)
-  // [<<65, 66>>, <<67>>]
+  // [Ok(<<65, 66>>), Ok(<<67>>)]
+  // A truncated trailing frame surfaces as one
+  // Error(IncompleteFrame(expected:, got:)) before the stream halts,
+  // so callers can react instead of silently losing data.
 }
 ```
 
