@@ -6,12 +6,6 @@ It is meant for pipelines that should stay lazy, repeatable, and explicit
 about effects. A `Stream(a)` is a pipeline definition, not a materialized
 collection, so each terminal operation runs the source again.
 
-## Status
-
-Pre-1.0. The public API may change between any 0.x release. Pin a
-specific version in your `gleam.toml` and review the [CHANGELOG](CHANGELOG.md)
-before upgrading.
-
 ## Install
 
 ```sh
