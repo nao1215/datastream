@@ -63,18 +63,37 @@ fn bytes_pull(
 
 // --- length-prefixed -----------------------------------------------------
 
+/// Truncation surfaced by `length_prefixed` when the input ends
+/// mid-frame.
+///
+/// `expected` is the number of bytes the combinator was waiting for —
+/// either `prefix_size` (when the prefix itself was short) or the
+/// declared payload length (when the prefix was complete but the
+/// payload was short). `got` is the number of bytes the stream
+/// actually delivered toward that requirement (always `< expected`).
+pub type IncompleteFrame {
+  IncompleteFrame(expected: Int, got: Int)
+}
+
 /// Read a `prefix_size` byte big-endian unsigned length, then yield
-/// the next `length` bytes as a frame.
+/// the next `length` bytes as a frame, wrapped in `Ok`.
 ///
 /// `prefix_size` MUST be one of `{1, 2, 4, 8}`. Other values are
 /// rejected at construction time with a panic.
 ///
-/// Incomplete frames at end-of-input (short prefix or short payload)
-/// are NOT emitted; the stream simply halts.
+/// If the input ends mid-frame (the prefix is shorter than
+/// `prefix_size` bytes, or the payload is shorter than the declared
+/// length), the stream emits exactly one
+/// `Error(IncompleteFrame(expected:, got:))` element before halting,
+/// so callers can distinguish "no more frames" from "truncated final
+/// frame". The `Stream(Result(_, _))` shape mirrors `text.utf8_decode`;
+/// chain `fold.collect_result` to stop on the first truncation, or
+/// `fold.partition_result` to drive the stream to completion and split
+/// well-formed frames from the incomplete tail.
 pub fn length_prefixed(
   over stream: Stream(BitArray),
   prefix_size prefix_size: Int,
-) -> Stream(BitArray) {
+) -> Stream(Result(BitArray, IncompleteFrame)) {
   case prefix_size {
     1 | 2 | 4 | 8 -> length_prefixed_active(stream, <<>>, prefix_size, False)
     _ ->
@@ -87,7 +106,7 @@ fn length_prefixed_active(
   buffer: BitArray,
   prefix_size: Int,
   source_drained: Bool,
-) -> Stream(BitArray) {
+) -> Stream(Result(BitArray, IncompleteFrame)) {
   datastream.make(
     pull: fn() {
       length_prefixed_pull(source, buffer, prefix_size, source_drained)
@@ -101,12 +120,24 @@ fn length_prefixed_pull(
   buffer: BitArray,
   prefix_size: Int,
   source_drained: Bool,
-) -> Step(BitArray, Stream(BitArray)) {
+) -> Step(
+  Result(BitArray, IncompleteFrame),
+  Stream(Result(BitArray, IncompleteFrame)),
+) {
   case bit_array.byte_size(buffer) >= prefix_size {
     False ->
-      ensure_more(source, buffer, source_drained, fn(s, b, d) {
-        length_prefixed_pull(s, b, prefix_size, d)
-      })
+      case source_drained {
+        True ->
+          case bit_array.byte_size(buffer) {
+            0 -> Done
+            got ->
+              Next(
+                Error(IncompleteFrame(expected: prefix_size, got: got)),
+                length_prefixed_active(source, <<>>, prefix_size, True),
+              )
+          }
+        False -> length_prefixed_pull_more(source, buffer, prefix_size)
+      }
     True ->
       length_prefixed_with_prefix(source, buffer, prefix_size, source_drained)
   }
@@ -117,7 +148,10 @@ fn length_prefixed_with_prefix(
   buffer: BitArray,
   prefix_size: Int,
   source_drained: Bool,
-) -> Step(BitArray, Stream(BitArray)) {
+) -> Step(
+  Result(BitArray, IncompleteFrame),
+  Stream(Result(BitArray, IncompleteFrame)),
+) {
   let length = read_prefix(buffer, prefix_size)
   let total_needed = prefix_size + length
   case bit_array.byte_size(buffer) >= total_needed {
@@ -132,15 +166,43 @@ fn length_prefixed_with_prefix(
       {
         Ok(frame), Ok(rest) ->
           Next(
-            frame,
+            Ok(frame),
             length_prefixed_active(source, rest, prefix_size, source_drained),
           )
         _, _ -> Done
       }
     False ->
-      ensure_more(source, buffer, source_drained, fn(s, b, d) {
-        length_prefixed_pull(s, b, prefix_size, d)
-      })
+      case source_drained {
+        True ->
+          Next(
+            Error(IncompleteFrame(
+              expected: length,
+              got: bit_array.byte_size(buffer) - prefix_size,
+            )),
+            length_prefixed_active(source, <<>>, prefix_size, True),
+          )
+        False -> length_prefixed_pull_more(source, buffer, prefix_size)
+      }
+  }
+}
+
+fn length_prefixed_pull_more(
+  source: Stream(BitArray),
+  buffer: BitArray,
+  prefix_size: Int,
+) -> Step(
+  Result(BitArray, IncompleteFrame),
+  Stream(Result(BitArray, IncompleteFrame)),
+) {
+  case datastream.pull(source) {
+    Next(chunk, source_rest) ->
+      length_prefixed_pull(
+        source_rest,
+        bit_array.append(buffer, chunk),
+        prefix_size,
+        False,
+      )
+    Done -> length_prefixed_pull(source, buffer, prefix_size, True)
   }
 }
 
@@ -351,26 +413,6 @@ fn fixed_size_pull(
               )
             Done -> fixed_size_pull(source, buffer, size, True)
           }
-      }
-  }
-}
-
-// --- internal helpers ----------------------------------------------------
-
-fn ensure_more(
-  source: Stream(BitArray),
-  buffer: BitArray,
-  source_drained: Bool,
-  retry: fn(Stream(BitArray), BitArray, Bool) ->
-    Step(BitArray, Stream(BitArray)),
-) -> Step(BitArray, Stream(BitArray)) {
-  case source_drained {
-    True -> Done
-    False ->
-      case datastream.pull(source) {
-        Next(chunk, source_rest) ->
-          retry(source_rest, bit_array.append(buffer, chunk), False)
-        Done -> retry(source, buffer, True)
       }
   }
 }

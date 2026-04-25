@@ -16,6 +16,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   `binary.length_prefixed` / `binary.fixed_size` policy of crashing
   on programmer error so callers cannot quietly trust corrupted
   input. (#144)
+- **BREAKING**: `binary.length_prefixed` now returns
+  `Stream(Result(BitArray, IncompleteFrame))` instead of
+  `Stream(BitArray)`. Well-formed frames surface as `Ok(frame)`. When
+  the input ends mid-frame (short prefix or short payload), the
+  stream emits exactly one
+  `Error(IncompleteFrame(expected:, got:))` element before halting
+  so callers can distinguish "no more frames" from "truncated final
+  frame" — the previous silent-halt behaviour was unsafe for any
+  framed protocol that must reject partial messages. The
+  `Stream(Result(_, _))` shape mirrors `text.utf8_decode`. (#147)
+
+### Added
+
+- `binary.IncompleteFrame(expected:, got:)` type, surfaced by
+  `binary.length_prefixed` on truncated input.
 
 ## [0.1.1] - 2026-04-25
 
