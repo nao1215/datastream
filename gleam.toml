@@ -80,6 +80,13 @@ thrown_away_error = "off"
 "src/datastream/binary.gleam" = [
   "avoid_panic",
 ]
+# `source.from_bit_array` rejects non-byte-aligned input at
+# construction time with `panic` per #144: silently dropping the
+# trailing sub-byte tail would be data loss the caller could not
+# observe, so a programmer error here must crash.
+"src/datastream/source.gleam" = [
+  "avoid_panic",
+]
 # `par.map_*` reject `max_workers < 1`, `max_buffer < 1`, and
 # `max_buffer < max_workers` for `map_ordered` with `panic` per
 # spec #20: the only sensible response to a programmer error like

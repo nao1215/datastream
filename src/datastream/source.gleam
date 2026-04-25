@@ -16,6 +16,7 @@
 //// on every terminal call: there is no implicit caching.
 
 import datastream.{type Step, type Stream, Done, Next}
+import gleam/bit_array
 import gleam/dict.{type Dict}
 import gleam/option.{type Option, None, Some}
 
@@ -121,13 +122,24 @@ pub fn from_dict(d: Dict(k, v)) -> Stream(#(k, v)) {
 ///
 /// An empty `BitArray` produces the empty stream. This is the natural
 /// shape for the upcoming `binary` and `text.utf8_decode` work.
+///
+/// The input MUST be byte-aligned (its bit length MUST be a multiple
+/// of 8). A non-byte-aligned input is rejected at construction time
+/// with a panic, matching the policy `binary.length_prefixed` and
+/// `binary.fixed_size` already use for invalid arguments — silently
+/// dropping the trailing sub-byte tail would be data loss the caller
+/// could not observe.
 pub fn from_bit_array(bytes: BitArray) -> Stream(Int) {
-  unfold(from: bytes, with: fn(remaining) {
-    case remaining {
-      <<byte:size(8), rest:bits>> -> Next(element: byte, state: rest)
-      _ -> Done
-    }
-  })
+  case bit_array.bit_size(bytes) % 8 {
+    0 ->
+      unfold(from: bytes, with: fn(remaining) {
+        case remaining {
+          <<byte:size(8), rest:bits>> -> Next(element: byte, state: rest)
+          _ -> Done
+        }
+      })
+    _ -> panic as "datastream/source.from_bit_array: input must be byte-aligned"
+  }
 }
 
 /// Build a stream from an initial state and a step function.
