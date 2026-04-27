@@ -194,6 +194,13 @@ fn drop_while_pull(
 /// Honours the spec close ordering: `second` is opened only after
 /// `first` returns `Done` (and so has already closed itself); on early
 /// exit before `first` finishes, `second` is never opened.
+///
+/// **Close contract:** `first` self-closes when it returns `Done`;
+/// `append` does not call `close` on it again. After `first` is
+/// exhausted, `second`'s elements are yielded directly — when `second`
+/// itself returns `Done`, it self-closes in the same way. On early
+/// exit mid-`second`, the downstream's `close` call propagates to the
+/// active `second` node.
 pub fn append(first: Stream(a), second: Stream(a)) -> Stream(a) {
   datastream.make(pull: fn() { append_pull(first, second) }, close: fn() {
     datastream.close(first)
@@ -247,6 +254,13 @@ fn filter_map_pull(
 /// constructed until the previous one is exhausted. On early exit
 /// before the outer is `Done`, the active inner is closed first, then
 /// the outer.
+///
+/// **Close contract:** when an inner stream returns `Done`, `flat_map`
+/// does NOT call `close` on it — the source is expected to have
+/// released its resources when it returned `Done` (the self-close
+/// convention followed by `source.resource`). Custom streams built
+/// with `make` must release resources inside `next` on the `Done`
+/// path if they hold any.
 pub fn flat_map(over stream: Stream(a), with f: fn(a) -> Stream(b)) -> Stream(b) {
   flat_map_outer(stream, f)
 }
