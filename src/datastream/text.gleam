@@ -79,12 +79,7 @@ fn lines_pull(
                 lines_active(source, "", [], False, True),
               )
           }
-        False ->
-          pull_next_nonempty_chunk(
-            source,
-            new_pending,
-            new_cr_pending,
-          )
+        False -> pull_next_nonempty_chunk(source, new_pending, new_cr_pending)
       }
   }
 }
