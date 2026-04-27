@@ -390,6 +390,31 @@ pub fn main() {
 - Errors are carried in the element type, for example
   `Stream(Result(a, e))`
 
+### Close contract
+
+`source.resource` calls `close(state)` automatically when `next` returns
+`Done`. Combinators such as `flat_map` and `append` rely on this
+**self-close-on-Done** convention: they do NOT call `close` on an upstream
+that has already returned `Done`, because the source has already released
+its resources at that point.
+
+This means:
+
+- **`source.resource`** — safe. Resources are released on every
+  termination path (normal end, early exit, `take`, `sink.try_each`
+  error).
+- **`source.from_list`**, **`source.iterate`**, etc. — no resources to
+  close, so the convention is a no-op.
+- **Custom streams built with the internal `make` function** — `close` is
+  only called on early exit, NOT on natural exhaustion. If your custom
+  stream holds a resource, release it inside `next` when you return `Done`
+  (the same pattern `source.resource` uses internally).
+
+Combinators that hold multiple upstreams (`flat_map`, `zip`, `append`)
+close their upstreams in a documented order on early exit. On normal
+completion the self-close convention applies to each upstream
+independently.
+
 ## License
 
 MIT — see [LICENSE](LICENSE).
