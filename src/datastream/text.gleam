@@ -79,13 +79,26 @@ fn lines_pull(
                 lines_active(source, "", [], False, True),
               )
           }
-        False ->
-          case datastream.pull(source) {
-            Next(chunk, source_rest) ->
-              lines_pull(source_rest, chunk, new_pending, new_cr_pending, False)
-            Done -> lines_pull(source, "", new_pending, new_cr_pending, True)
-          }
+        False -> pull_next_nonempty_chunk(source, new_pending, new_cr_pending)
       }
+  }
+}
+
+/// Pull chunks from the source, skipping empty strings, until we get
+/// a non-empty chunk or the source is drained. This prevents an
+/// infinite loop when cr_pending is True and the source emits
+/// consecutive empty-string chunks.
+fn pull_next_nonempty_chunk(
+  source: Stream(String),
+  pending: List(String),
+  cr_pending: Bool,
+) -> Step(String, Stream(String)) {
+  case datastream.pull(source) {
+    Next("", source_rest) ->
+      pull_next_nonempty_chunk(source_rest, pending, cr_pending)
+    Next(chunk, source_rest) ->
+      lines_pull(source_rest, chunk, pending, cr_pending, False)
+    Done -> lines_pull(source, "", pending, cr_pending, True)
   }
 }
 

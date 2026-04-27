@@ -73,6 +73,34 @@ pub fn lines_on_truly_empty_source_yields_no_lines_test() {
   from_list([]) |> text.lines |> fold.to_list |> should.equal([])
 }
 
+pub fn lines_cr_at_chunk_end_followed_by_empty_chunks_test() {
+  // Issue #157: a CR at end of a chunk followed by empty-string chunks
+  // must not loop forever. The empty chunks should be skipped and the
+  // CR treated as a line terminator when the source eventually drains.
+  from_list(["hello\r", "", "", "world"])
+  |> text.lines
+  |> fold.to_list
+  |> should.equal(["hello", "world"])
+}
+
+pub fn lines_cr_then_empty_then_lf_test() {
+  // CR at chunk end, empty chunk, then a chunk starting with LF.
+  // The \r\n pair should be treated as one terminator.
+  from_list(["hello\r", "", "\nworld"])
+  |> text.lines
+  |> fold.to_list
+  |> should.equal(["hello", "world"])
+}
+
+pub fn lines_cr_at_end_followed_by_all_empty_chunks_test() {
+  // CR at chunk end, all remaining chunks are empty, then source drains.
+  // The CR should be treated as a terminator; "hello" is emitted.
+  from_list(["hello\r", "", ""])
+  |> text.lines
+  |> fold.to_list
+  |> should.equal(["hello"])
+}
+
 // --- split -----------------------------------------------------------------
 
 pub fn split_on_comma_yields_pieces_test() {
