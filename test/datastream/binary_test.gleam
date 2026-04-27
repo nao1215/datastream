@@ -289,3 +289,31 @@ pub fn fixed_size_panics_on_negative_size_test() {
     })
   did_panic |> should.be_true
 }
+
+// --- Issue #158: FrameTooLarge on oversized prefix claims ---
+
+pub fn length_prefixed_rejects_oversized_frame_claim_test() {
+  // 4-byte prefix claiming 999,999,999 bytes, with only 4 payload bytes
+  from_list([<<59, 154, 201, 255, 1, 2, 3, 4>>])
+  |> binary.length_prefixed_with(prefix_size: 4, max_frame_size: 1024)
+  |> fold.to_list
+  |> should.equal([
+    Error(binary.FrameTooLarge(claimed: 999_999_999, max: 1024)),
+  ])
+}
+
+pub fn length_prefixed_with_small_max_allows_small_frames_test() {
+  // 1-byte prefix: length=3, payload=<<1,2,3>> — fits in max_frame_size=10
+  from_list([<<3, 1, 2, 3>>])
+  |> binary.length_prefixed_with(prefix_size: 1, max_frame_size: 10)
+  |> fold.to_list
+  |> should.equal([Ok(<<1, 2, 3>>)])
+}
+
+pub fn length_prefixed_default_allows_normal_frames_test() {
+  // Default max (16 MiB) allows a 3-byte frame without issue
+  from_list([<<3, 65, 66, 67>>])
+  |> binary.length_prefixed(prefix_size: 1)
+  |> fold.to_list
+  |> should.equal([Ok(<<65, 66, 67>>)])
+}
