@@ -18,6 +18,24 @@ gleam add datastream
 
 API reference: <https://hexdocs.pm/datastream>
 
+## Compatibility with web frameworks
+
+`datastream` depends on `gleam_erlang >= 1.3.0` and
+`gleam_stdlib >= 0.44.0`. Some older versions of popular web-framework
+packages pin `gleam_erlang < 1.0.0`, which creates an unresolvable
+dependency conflict. Use the versions listed below (or newer) when
+combining `datastream` with a web stack:
+
+| Package | Minimum compatible version |
+|---------|--------------------------|
+| wisp | `>= 2.0.0` |
+| mist | `>= 6.0.0` |
+| gleam_httpc | `>= 5.0.0` |
+
+Older releases of these packages (wisp 1.x, mist 4.x, gleam_httpc 3.x)
+require `gleam_erlang < 1.0.0` and cannot coexist with `datastream` in
+the same project.
+
 ## Target support
 
 - Erlang target: every module in this package
