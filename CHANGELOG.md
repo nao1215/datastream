@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-04-27
+
+### Fixed
+
+- **text.lines** no longer loops infinitely when a source emits
+  consecutive empty-string chunks while a `\r` is pending (waiting to
+  see if the next character is `\n`). Empty chunks are now skipped in
+  that state. (#157, #160)
+- **binary.length_prefixed** now rejects frames whose prefix claims
+  more bytes than `max_frame_size` (default 16 MiB) immediately with
+  `Error(FrameTooLarge(claimed:, max:))`, preventing unbounded memory
+  buffering on corrupt or malicious input. A new
+  `length_prefixed_with` function accepts an explicit limit. (#158,
+  #161)
+- **par.map_unordered** and **par.map_ordered** no longer deadlock
+  when a worker function panics. Workers are now monitored via
+  `process.monitor`; abnormal exits halt the stream with `Done`
+  instead of blocking forever. (#156, #162)
+
+### Added
+
+- `binary.FrameTooLarge(claimed:, max:)` variant added to
+  `IncompleteFrame` type.
+- `binary.length_prefixed_with(over:, prefix_size:, max_frame_size:)`
+  for explicit frame-size limits.
+
+### Documentation
+
+- Add "Compatibility with web frameworks" section to README listing
+  minimum compatible versions of wisp (≥ 2.0.0), mist (≥ 6.0.0),
+  and gleam_httpc (≥ 5.0.0). (#153, #159)
+- Document the self-close-on-Done contract in the README Semantics
+  section and in `flat_map` / `append` doc comments so users
+  understand when `close` is and isn't called. (#163)
+
 ## [0.2.0] - 2026-04-25
 
 ### Changed
