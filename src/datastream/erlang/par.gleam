@@ -49,8 +49,9 @@
 ////
 //// ## Notes
 ////
-//// - A `f(x)` that `panic`s leaves the pipeline blocked; this is a
-////   known limitation across all `par.*` combinators.
+//// - A `f(x)` that `panic`s terminates the stream with `Done`.
+////   The crashed worker is detected via `process.monitor`, so the
+////   pipeline does not deadlock.
 //// - `merge` workers poll for a coordinator-liveness signal every
 ////   `merge_worker_liveness_check_ms` ms. If the caller of
 ////   `merge` / `merge_with` drops the returned stream without
@@ -217,14 +218,50 @@ fn map_unordered_step(
   case state.workers_busy {
     0 -> Done
     _ -> {
-      let result = process.receive_forever(from: state.result_subject)
+      map_unordered_receive(state)
+    }
+  }
+}
+
+@target(erlang)
+fn map_unordered_receive(
+  state: MapUnordered(a, b),
+) -> datastream.Step(b, Stream(b)) {
+  let selector =
+    process.new_selector()
+    |> process.select_map(state.result_subject, fn(msg) { Ok(msg) })
+    |> process.select_monitors(fn(down) {
+      case down {
+        process.ProcessDown(reason: process.Normal, ..) -> Error(False)
+        _ -> Error(True)
+      }
+    })
+  case process.selector_receive_forever(from: selector) {
+    Ok(result) ->
       Next(
         result,
         build_map_unordered_stream(
           MapUnordered(..state, workers_busy: state.workers_busy - 1),
         ),
       )
-    }
+    Error(True) ->
+      // Abnormal exit. The worker may have sent its result before
+      // crashing — check the subject with a brief timeout.
+      case process.receive(from: state.result_subject, within: 10) {
+        Ok(result) ->
+          Next(
+            result,
+            build_map_unordered_stream(
+              MapUnordered(..state, workers_busy: state.workers_busy - 1),
+            ),
+          )
+        Error(_) ->
+          // No result — genuine crash. Halt.
+          Done
+      }
+    Error(False) ->
+      // Normal exit DOWN — skip and wait for the actual result.
+      map_unordered_receive(state)
   }
 }
 
@@ -242,8 +279,9 @@ fn dispatch_unordered(state: MapUnordered(a, b)) -> MapUnordered(a, b) {
         Next(element, rest) -> {
           let subj = state.result_subject
           let func = state.f
-          let _pid =
+          let pid =
             process.spawn_unlinked(fn() { process.send(subj, func(element)) })
+          let _monitor = process.monitor(pid)
           dispatch_unordered(
             MapUnordered(
               ..state,
@@ -356,8 +394,36 @@ fn map_ordered_step(state: MapOrdered(a, b)) -> datastream.Step(b, Stream(b)) {
       case state.workers_busy {
         0 -> Done
         _ -> {
-          let #(idx, value) =
-            process.receive_forever(from: state.result_subject)
+          map_ordered_receive(state)
+        }
+      }
+  }
+}
+
+@target(erlang)
+fn map_ordered_receive(state: MapOrdered(a, b)) -> datastream.Step(b, Stream(b)) {
+  let selector =
+    process.new_selector()
+    |> process.select_map(state.result_subject, fn(msg) { Ok(msg) })
+    |> process.select_monitors(fn(down) {
+      case down {
+        process.ProcessDown(reason: process.Normal, ..) -> Error(False)
+        _ -> Error(True)
+      }
+    })
+  case process.selector_receive_forever(from: selector) {
+    Ok(#(idx, value)) ->
+      map_ordered_step(
+        MapOrdered(
+          ..state,
+          workers_busy: state.workers_busy - 1,
+          pending: dict.insert(state.pending, idx, value),
+        ),
+      )
+    Error(True) ->
+      // Abnormal exit. Check subject briefly before halting.
+      case process.receive(from: state.result_subject, within: 10) {
+        Ok(#(idx, value)) ->
           map_ordered_step(
             MapOrdered(
               ..state,
@@ -365,8 +431,11 @@ fn map_ordered_step(state: MapOrdered(a, b)) -> datastream.Step(b, Stream(b)) {
               pending: dict.insert(state.pending, idx, value),
             ),
           )
-        }
+        Error(_) -> Done
       }
+    Error(False) ->
+      // Normal exit DOWN — skip and wait for the actual result.
+      map_ordered_receive(state)
   }
 }
 
@@ -385,10 +454,11 @@ fn dispatch_ordered(state: MapOrdered(a, b)) -> MapOrdered(a, b) {
           let subj = state.result_subject
           let func = state.f
           let position = state.next_dispatch_index
-          let _pid =
+          let pid =
             process.spawn_unlinked(fn() {
               process.send(subj, #(position, func(element)))
             })
+          let _monitor = process.monitor(pid)
           dispatch_ordered(
             MapOrdered(
               ..state,
