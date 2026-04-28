@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-04-28
+
 ### Added
 
 - **fold.to_string**, **fold.to_string_tree**, and **fold.to_bit_array**
