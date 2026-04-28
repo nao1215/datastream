@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **text.records** groups a `Stream(String)` of lines into a
+  `Stream(List(String))` of records separated by blank lines —
+  the framing used by Server-Sent Events (SSE), blank-line-separated
+  NDJSON variants, mbox / RFC 822 envelopes, and ad-hoc text wire
+  formats. Pair with `text.lines` for an end-to-end record decoder
+  (`stream |> text.lines |> text.records |> stream.map(parse_event)`).
+  Multiple consecutive blank lines collapse to a single separator
+  (no empty records, no spurious leading record), and a trailing
+  record without a terminating blank line is still emitted so the
+  last record is never silently dropped. The previous workaround —
+  `string.split("\n\n")` over a buffered `String` — required the
+  entire payload up-front; this primitive runs incrementally over
+  any chunked source. (#165)
+
 ## [0.3.0] - 2026-04-27
 
 ### Fixed

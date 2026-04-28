@@ -101,6 +101,86 @@ pub fn lines_cr_at_end_followed_by_all_empty_chunks_test() {
   |> should.equal(["hello"])
 }
 
+// --- records ---------------------------------------------------------------
+
+pub fn records_two_single_line_records_test() {
+  from_list(["a", "", "b"])
+  |> text.records
+  |> fold.to_list
+  |> should.equal([["a"], ["b"]])
+}
+
+pub fn records_multiline_records_test() {
+  from_list(["a", "b", "", "c"])
+  |> text.records
+  |> fold.to_list
+  |> should.equal([["a", "b"], ["c"]])
+}
+
+pub fn records_trailing_blank_does_not_emit_empty_record_test() {
+  from_list(["a", "", "b", ""])
+  |> text.records
+  |> fold.to_list
+  |> should.equal([["a"], ["b"]])
+}
+
+pub fn records_leading_blank_is_ignored_test() {
+  from_list(["", "a"])
+  |> text.records
+  |> fold.to_list
+  |> should.equal([["a"]])
+}
+
+pub fn records_consecutive_blanks_collapse_test() {
+  from_list(["a", "", "", "b"])
+  |> text.records
+  |> fold.to_list
+  |> should.equal([["a"], ["b"]])
+}
+
+pub fn records_only_blanks_yields_no_records_test() {
+  from_list(["", "", ""]) |> text.records |> fold.to_list |> should.equal([])
+}
+
+pub fn records_empty_source_yields_no_records_test() {
+  from_list([]) |> text.records |> fold.to_list |> should.equal([])
+}
+
+pub fn records_single_blank_yields_no_records_test() {
+  from_list([""]) |> text.records |> fold.to_list |> should.equal([])
+}
+
+pub fn records_no_terminating_blank_emits_trailing_record_test() {
+  from_list(["a", "b"])
+  |> text.records
+  |> fold.to_list
+  |> should.equal([["a", "b"]])
+}
+
+/// Issue #165 reproduction: SSE-style framing where each event is a
+/// block of `field: value` lines separated from the next event by a
+/// blank line. The previous user-supplied `string.split("\n\n")`
+/// workaround required the entire payload buffered up front; with
+/// `text.records` an SSE consumer composes with `text.lines` and
+/// streams record-by-record.
+pub fn records_sse_style_framing_test() {
+  from_list([
+    "event: heartbeat\n",
+    "data: 1\n",
+    "\n",
+    "event: post\n",
+    "data: hello\n",
+    "data: world\n",
+  ])
+  |> text.lines
+  |> text.records
+  |> fold.to_list
+  |> should.equal([
+    ["event: heartbeat", "data: 1"],
+    ["event: post", "data: hello", "data: world"],
+  ])
+}
+
 // --- split -----------------------------------------------------------------
 
 pub fn split_on_comma_yields_pieces_test() {
