@@ -1,6 +1,7 @@
 import datastream.{Done, Next}
 import datastream/fold
 import gleam/option.{None, Some}
+import gleam/string_tree
 import gleeunit
 import gleeunit/should
 
@@ -27,6 +28,58 @@ pub fn to_list_returns_elements_in_source_order_test() {
 
 pub fn to_list_on_empty_returns_empty_test() {
   from_list([]) |> fold.to_list |> should.equal([])
+}
+
+pub fn to_string_concatenates_chunks_in_source_order_test() {
+  from_list(["a", "bc", "def"]) |> fold.to_string |> should.equal("abcdef")
+}
+
+pub fn to_string_on_empty_returns_empty_string_test() {
+  from_list([]) |> fold.to_string |> should.equal("")
+}
+
+pub fn to_string_preserves_unicode_test() {
+  from_list(["こん", "にち", "は"])
+  |> fold.to_string
+  |> should.equal("こんにちは")
+}
+
+pub fn to_string_drives_stream_to_completion_test() {
+  // Confirms `to_string` is a full-traversal reducer (not short-circuiting):
+  // every chunk must end up in the result.
+  from_list(["1", "2", "3", "4", "5"])
+  |> fold.to_string
+  |> should.equal("12345")
+}
+
+pub fn to_string_tree_preserves_source_order_test() {
+  from_list(["a", "b", "c"])
+  |> fold.to_string_tree
+  |> string_tree.to_string
+  |> should.equal("abc")
+}
+
+pub fn to_string_tree_on_empty_returns_empty_tree_test() {
+  from_list([])
+  |> fold.to_string_tree
+  |> string_tree.is_empty
+  |> should.be_true
+}
+
+pub fn to_bit_array_concatenates_chunks_in_source_order_test() {
+  from_list([<<1, 2>>, <<3>>, <<4, 5, 6>>])
+  |> fold.to_bit_array
+  |> should.equal(<<1, 2, 3, 4, 5, 6>>)
+}
+
+pub fn to_bit_array_on_empty_returns_empty_bit_array_test() {
+  from_list([]) |> fold.to_bit_array |> should.equal(<<>>)
+}
+
+pub fn to_bit_array_preserves_byte_boundaries_test() {
+  from_list([<<0xde, 0xad>>, <<0xbe, 0xef>>])
+  |> fold.to_bit_array
+  |> should.equal(<<0xde, 0xad, 0xbe, 0xef>>)
 }
 
 pub fn count_returns_number_of_elements_test() {
