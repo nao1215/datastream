@@ -10,8 +10,10 @@
 //// implicit caching.
 
 import datastream.{type Stream, Done, Next}
+import gleam/bytes_tree
 import gleam/list
 import gleam/option.{type Option, None, Some}
+import gleam/string_tree.{type StringTree}
 
 /// Materialise the stream into a list, preserving source order.
 ///
@@ -21,6 +23,46 @@ pub fn to_list(stream: Stream(a)) -> List(a) {
   stream
   |> fold(from: [], with: fn(acc, element) { [element, ..acc] })
   |> list.reverse
+}
+
+/// Materialise a `Stream(String)` into a single concatenated `String`.
+///
+/// Internally accumulates into a `StringTree`, so concatenation is
+/// `O(total length)` rather than the `O(n²)` shape that
+/// `to_list |> string.concat` produces on long streams. Pulls every
+/// element; for terminating streams only. Returns `""` on an empty stream.
+pub fn to_string(stream: Stream(String)) -> String {
+  stream
+  |> to_string_tree
+  |> string_tree.to_string
+}
+
+/// Materialise a `Stream(String)` into a `StringTree`, preserving source
+/// order without flattening.
+///
+/// Useful when the caller wants to keep building the tree — prepending a
+/// header, joining with another tree — before producing the final
+/// `String`. Returns the empty tree on an empty stream.
+pub fn to_string_tree(stream: Stream(String)) -> StringTree {
+  stream
+  |> fold(from: string_tree.new(), with: fn(acc, chunk) {
+    string_tree.append(acc, chunk)
+  })
+}
+
+/// Materialise a `Stream(BitArray)` into a single concatenated `BitArray`.
+///
+/// Internally accumulates into a `BytesTree`, which bridges to Erlang's
+/// `iolist_to_binary` on the BEAM and concatenates incrementally on
+/// JavaScript — both avoid the quadratic cost of materialising into a
+/// list and concatenating after the fact. Pulls every element; for
+/// terminating streams only. Returns `<<>>` on an empty stream.
+pub fn to_bit_array(stream: Stream(BitArray)) -> BitArray {
+  stream
+  |> fold(from: bytes_tree.new(), with: fn(acc, chunk) {
+    bytes_tree.append(acc, chunk)
+  })
+  |> bytes_tree.to_bit_array
 }
 
 /// Count the number of elements the stream produces.

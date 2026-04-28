@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **fold.to_string**, **fold.to_string_tree**, and **fold.to_bit_array**
+  are new terminal folds that materialise a `Stream(String)` /
+  `Stream(BitArray)` into a single concatenated value without going
+  through `to_list |> string.concat`. They accumulate into a
+  `StringTree` / `BytesTree` internally (Erlang `iolist_to_binary`
+  on the BEAM, incremental string concatenation on JavaScript), so
+  cost is `O(total length)` rather than the `O(n²)` shape of
+  `to_list`-then-concat. The shape is the natural completion of a
+  text- or byte-output pipeline (NDJSON / CSV export, log
+  aggregation, HTTP response bodies). `to_string_tree` is provided
+  for callers who want to keep building the tree before producing
+  the final `String`. (#168)
+
 ## [0.4.0] - 2026-04-28
 
 ### Added
