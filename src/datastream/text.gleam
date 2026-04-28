@@ -154,6 +154,86 @@ fn reverse_concat(reversed_graphemes: List(String)) -> String {
   string.concat(list.reverse(reversed_graphemes))
 }
 
+/// Group a stream of lines into records separated by blank lines.
+///
+/// Each emitted `List(String)` carries the lines of one record in
+/// source order. Blank lines act as record separators and are not
+/// included in any record. Multiple consecutive blank lines collapse
+/// (no empty records are emitted, no spurious record at the start of
+/// the stream when the input begins with a blank line). A trailing
+/// record without a terminating blank line is still emitted so the
+/// last record is not silently dropped.
+///
+/// Pair with `text.lines` for SSE (Server-Sent Events),
+/// blank-line-separated NDJSON variants, mbox / RFC 822-style
+/// envelopes, and similar wire formats:
+///
+/// ```gleam
+/// stream
+/// |> text.lines
+/// |> text.records
+/// |> stream.map(parse_event)
+/// ```
+///
+/// Chunk-boundary handling: this operator runs entirely on the line
+/// stream, so it inherits the chunk-boundary correctness of `lines`
+/// — a record terminator that lands across two chunks is still
+/// recognised because `lines` already absorbed the boundary before
+/// emitting.
+pub fn records(over stream: Stream(String)) -> Stream(List(String)) {
+  records_active(stream, [], False)
+}
+
+fn records_active(
+  source: Stream(String),
+  acc_rev: List(String),
+  source_drained: Bool,
+) -> Stream(List(String)) {
+  datastream.make(
+    pull: fn() { records_pull(source, acc_rev, source_drained) },
+    close: fn() { maybe_close(source, source_drained) },
+  )
+}
+
+fn records_pull(
+  source: Stream(String),
+  acc_rev: List(String),
+  source_drained: Bool,
+) -> Step(List(String), Stream(List(String))) {
+  case source_drained {
+    True -> finish_records(source, acc_rev)
+    False ->
+      case datastream.pull(source) {
+        Done -> finish_records(source, acc_rev)
+        Next("", source_rest) ->
+          case acc_rev {
+            // Leading blank or back-to-back separator: skip without
+            // emitting an empty record and keep pulling. The recursive
+            // call only happens after the source has advanced, so this
+            // cannot loop on a single value.
+            [] -> records_pull(source_rest, [], False)
+            _ ->
+              Next(
+                list.reverse(acc_rev),
+                records_active(source_rest, [], False),
+              )
+          }
+        Next(line, source_rest) ->
+          records_pull(source_rest, [line, ..acc_rev], False)
+      }
+  }
+}
+
+fn finish_records(
+  source: Stream(String),
+  acc_rev: List(String),
+) -> Step(List(String), Stream(List(String))) {
+  case acc_rev {
+    [] -> Done
+    _ -> Next(list.reverse(acc_rev), records_active(source, [], True))
+  }
+}
+
 /// Split a stream of strings on `delimiter`, emitting every separated
 /// piece including the empty pieces between consecutive delimiters and
 /// at the start / end of the input.
