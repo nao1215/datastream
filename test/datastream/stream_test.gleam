@@ -360,6 +360,82 @@ pub fn dedupe_adjacent_keeps_non_adjacent_duplicates_test() {
   |> should.equal([1, 2, 1, 2, 1])
 }
 
+pub fn buffer_preserves_elements_at_capacity_one_test() {
+  from_list([1, 2, 3, 4, 5])
+  |> stream.buffer(prefetch: 1)
+  |> fold.to_list
+  |> should.equal([1, 2, 3, 4, 5])
+}
+
+pub fn buffer_preserves_elements_at_small_capacity_test() {
+  from_list([1, 2, 3, 4, 5])
+  |> stream.buffer(prefetch: 3)
+  |> fold.to_list
+  |> should.equal([1, 2, 3, 4, 5])
+}
+
+pub fn buffer_preserves_elements_when_capacity_exceeds_source_test() {
+  from_list([1, 2, 3])
+  |> stream.buffer(prefetch: 100)
+  |> fold.to_list
+  |> should.equal([1, 2, 3])
+}
+
+pub fn buffer_on_empty_yields_empty_test() {
+  from_list([])
+  |> stream.buffer(prefetch: 4)
+  |> fold.to_list
+  |> should.equal([])
+}
+
+pub fn buffer_terminates_on_infinite_source_via_take_test() {
+  iterate(0, with: fn(n) { n + 1 })
+  |> stream.buffer(prefetch: 8)
+  |> stream.take(up_to: 5)
+  |> fold.to_list
+  |> should.equal([0, 1, 2, 3, 4])
+}
+
+pub fn buffer_then_take_zero_yields_empty_test() {
+  from_list([1, 2, 3])
+  |> stream.buffer(prefetch: 4)
+  |> stream.take(up_to: 0)
+  |> fold.to_list
+  |> should.equal([])
+}
+
+pub fn buffer_composes_with_map_test() {
+  from_list([1, 2, 3])
+  |> stream.buffer(prefetch: 2)
+  |> stream.map(with: fn(x) { x * 10 })
+  |> fold.to_list
+  |> should.equal([10, 20, 30])
+}
+
+@target(erlang)
+pub fn buffer_zero_panics_test() {
+  let did_panic =
+    panicked(fn() {
+      let _result =
+        from_list([1, 2, 3])
+        |> stream.buffer(prefetch: 0)
+      Nil
+    })
+  did_panic |> should.be_true
+}
+
+@target(erlang)
+pub fn buffer_negative_panics_test() {
+  let did_panic =
+    panicked(fn() {
+      let _result =
+        from_list([1, 2, 3])
+        |> stream.buffer(prefetch: -3)
+      Nil
+    })
+  did_panic |> should.be_true
+}
+
 fn chunks_to_lists(stream_of_chunks) {
   stream_of_chunks
   |> fold.to_list

@@ -520,6 +520,78 @@ fn dedupe_pull(stream: Stream(a), last: Option(a)) -> Step(a, Stream(a)) {
   }
 }
 
+/// Eagerly pull `capacity` elements ahead from `stream` and yield them
+/// to the consumer at its pace, refilling the internal queue back to
+/// `capacity` after every consumer pull.
+///
+/// `buffer` is the *prefetch* combinator: it decouples the consumer's
+/// pull cadence from upstream latency. For latency-bound upstreams
+/// (HTTP body bytes, cold reads from disk) the consumer can do its own
+/// per-element work in parallel with the next upstream pull instead of
+/// blocking serially on each one.
+///
+/// `capacity` MUST be `>= 1`. A `capacity < 1` is rejected at
+/// construction time with a panic per the `datastream` module-level
+/// invalid-argument policy — `capacity == 0` would defeat the point
+/// of buffering, and a negative capacity is programmer error.
+///
+/// Element type, order, and cardinality are preserved. When upstream
+/// returns `Done`, any already-buffered elements are still drained
+/// before the buffered stream itself emits `Done`. On consumer-side
+/// early termination the upstream is closed once and any unconsumed
+/// buffered elements are discarded — the upstream produced them in
+/// good faith but resource cleanup wins over delivery, matching
+/// `take`'s behaviour.
+pub fn buffer(over stream: Stream(a), prefetch capacity: Int) -> Stream(a) {
+  case capacity < 1 {
+    True -> panic as "datastream/stream.buffer: capacity must be >= 1"
+    False -> buffer_active(stream, [], 0, capacity)
+  }
+}
+
+fn buffer_active(
+  stream: Stream(a),
+  buf: List(a),
+  count: Int,
+  capacity: Int,
+) -> Stream(a) {
+  datastream.make(
+    pull: fn() { buffer_pull(stream, buf, count, capacity) },
+    close: fn() { datastream.close(stream) },
+  )
+}
+
+fn buffer_pull(
+  stream: Stream(a),
+  buf: List(a),
+  count: Int,
+  capacity: Int,
+) -> Step(a, Stream(a)) {
+  let #(buf, stream, count) = buffer_fill(stream, buf, count, capacity)
+  case buf {
+    [] -> Done
+    [head, ..tail] ->
+      Next(head, buffer_active(stream, tail, count - 1, capacity))
+  }
+}
+
+fn buffer_fill(
+  stream: Stream(a),
+  buf: List(a),
+  count: Int,
+  capacity: Int,
+) -> #(List(a), Stream(a), Int) {
+  case count >= capacity {
+    True -> #(buf, stream, count)
+    False ->
+      case datastream.pull(stream) {
+        Next(element, rest) ->
+          buffer_fill(rest, list.append(buf, [element]), count + 1, capacity)
+        Done -> #(buf, stream, count)
+      }
+  }
+}
+
 // --- chunked operations -----------------------------------------------------
 
 /// Group adjacent elements into fixed-size chunks.
