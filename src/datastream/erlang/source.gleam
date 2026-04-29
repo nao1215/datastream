@@ -23,6 +23,8 @@ pub const beam_only_marker: String = "datastream/erlang/source is BEAM-only"
 import datastream.{type Stream, Done, Next}
 
 @target(erlang)
+import datastream/fold
+@target(erlang)
 import datastream/source
 
 @target(erlang)
@@ -43,16 +45,45 @@ import gleam/erlang/process.{type Subject}
 /// only reads, it never closes the subject. The terminal completing
 /// is sufficient to release the stream's hold.
 ///
-/// **Limitation:** the resulting stream cannot be passed to any
-/// combinator in `datastream/erlang/par` or `datastream/erlang/time`,
-/// nor to `datastream/erlang/source.timeout` — those run the pull in
-/// a worker process and the `Subject`'s owner-only receive
-/// constraint causes a `panic`.
+/// **Limitation:** the resulting stream cannot be passed directly
+/// to any combinator in `datastream/erlang/par` or
+/// `datastream/erlang/time`, nor to
+/// `datastream/erlang/source.timeout` — those run the pull in a
+/// worker process and the `Subject`'s owner-only receive constraint
+/// causes a `panic` in the worker. Use `bridge_subject_stream`
+/// below to materialise the subject side in the owning process
+/// before handing it off.
 pub fn from_subject(
   from subject: Subject(a),
   while keep_running: fn() -> Bool,
 ) -> Stream(a) {
   source.unfold(from: Nil, with: fn(_) { receive_loop(subject, keep_running) })
+}
+
+@target(erlang)
+/// Materialise a `from_subject`-backed stream into a process-safe
+/// `Stream(a)` so the result can be composed with `par.*` /
+/// `time.*` / `source.timeout`.
+///
+/// The pull happens in the calling process — the same process that
+/// owns the `Subject` — so the owner-only receive constraint is
+/// respected. Once the upstream returns `Done`, the materialised
+/// `List(a)` is reopened as a list-backed stream, which is pure and
+/// can safely be pulled from any worker process.
+///
+/// **Caveat:** materialises the entire upstream into memory before
+/// emitting any element. Only use this on bounded subjects (a
+/// `keep_running` callback that eventually returns `False`, or a
+/// finite source). For an unbounded subject, route the parallel
+/// stage outside the subject pipeline instead — there is no
+/// process-safe way to lazily forward an Erlang `Subject` across a
+/// process boundary.
+///
+/// This is the official workaround for the
+/// `from_subject` × `par.*` / `time.*` incompatibility documented
+/// on `from_subject`, `par`, and `source.timeout`.
+pub fn bridge_subject_stream(over stream: Stream(a)) -> Stream(a) {
+  source.from_list(fold.to_list(stream))
 }
 
 @target(erlang)
