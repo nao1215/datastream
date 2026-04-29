@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **stream.buffer(stream, prefetch:)** is a new combinator that
+  pulls `prefetch` elements ahead from the upstream and yields them
+  to the consumer at its pace. The internal queue is refilled back
+  to capacity after every consumer pull, so a latency-bound
+  upstream (HTTP body bytes, slow disk reads) no longer blocks the
+  consumer's per-element work serially — the next upstream pull can
+  overlap with the current downstream computation. Capacity must
+  be `>= 1`; element type, order, and cardinality are preserved.
+  Pure-functional pull-state implementation with no `gleam_erlang`
+  / process / FFI dependency, so it runs on both the Erlang and
+  JavaScript targets. First sub-task of the Roadmap in #171. (#172)
+
 ## [0.5.0] - 2026-04-28
 
 ### Added
