@@ -45,12 +45,33 @@ pub fn from_list(list: List(a)) -> Stream(a) {
   })
 }
 
-/// Stop-exclusive integer range.
+/// Stop-EXCLUSIVE integer range.
 ///
 /// Counts up by 1 when `start < stop`, down by 1 when `start > stop`,
 /// and is empty when `start == stop`. Step-by-`n` sequences belong in
-/// `iterate` or `unfold`, keeping `range` aligned with the surrounding
-/// stdlib's `range`.
+/// `iterate` or `unfold`.
+///
+/// Examples:
+///
+/// ```gleam
+/// source.range(from: 1, to: 5) |> fold.to_list  // [1, 2, 3, 4]
+/// source.range(from: 0, to: 0) |> fold.to_list  // []
+/// source.range(from: 5, to: 1) |> fold.to_list  // [5, 4, 3, 2]
+/// ```
+///
+/// Stdlib has two `range` shapes with different conventions:
+///
+/// - `gleam/int.range` (fold form) is **stop-EXCLUSIVE**, matching this
+///   function.
+/// - `gleam/yielder.range` (pull-based stream form) is
+///   **stop-INCLUSIVE** — `yielder.range(from: 1, to: 5)` yields
+///   `[1, 2, 3, 4, 5]` and `yielder.range(from: 0, to: 0)` yields
+///   `[0]`, not the empty list.
+///
+/// `Stream(a)` is the closer analog of `Yielder(a)`, so be aware of
+/// the off-by-one when porting code between the two. Add `+ 1` to
+/// `to:` (or use `iterate` / `unfold` for full control) when you want
+/// inclusive semantics.
 pub fn range(from start: Int, to stop: Int) -> Stream(Int) {
   case start == stop {
     True -> empty()

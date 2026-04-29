@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- **source.range** doc-comment now spells out that the function is
+  stop-EXCLUSIVE and explicitly contrasts it with `gleam/yielder.range`
+  which is stop-INCLUSIVE. Adds runnable examples and a note on the
+  off-by-one when porting from `gleam/yielder`. The previous wording
+  ("keeping `range` aligned with the surrounding stdlib's `range`")
+  was true for `gleam/int.range` (fold-style, stop-exclusive) but
+  misleading for users who expected `gleam/yielder.range` semantics
+  since `Stream(a)` is the closer analog of `Yielder(a)`. Behaviour
+  unchanged. (#181)
+
 ## [0.6.0] - 2026-04-29
 
 ### Added
