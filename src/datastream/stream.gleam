@@ -19,6 +19,7 @@
 
 import datastream.{type Step, type Stream, Done, Next}
 import datastream/chunk.{type Chunk}
+import datastream/internal/ref.{type Ref}
 import gleam/list
 import gleam/option.{type Option, None, Some}
 
@@ -667,6 +668,260 @@ fn interrupt_pull_stream(
   case datastream.pull(stream) {
     Next(element, rest) -> Next(element, interrupt_active(rest, signal))
     Done -> Done
+  }
+}
+
+// --- broadcast and unzip ----------------------------------------------------
+
+/// Internal state shared by every consumer returned from `broadcast`.
+///
+/// `upstream` is `None` once the source has signalled `Done` (or once
+/// every consumer has called `close` and we proactively closed the
+/// source). Each `queue` holds elements that the source has produced
+/// but the corresponding consumer has not yet pulled. `active` tracks
+/// which consumers are still alive — we stop enqueueing into a closed
+/// consumer's queue, and once every flag is `False` we close the
+/// upstream from the last close call.
+type BroadcastState(a) {
+  BroadcastState(
+    upstream: Option(Stream(a)),
+    queues: List(List(a)),
+    active: List(Bool),
+  )
+}
+
+/// Split `stream` into `n` independent consumer streams that share a
+/// single underlying source.
+///
+/// Each consumer pulls at its own pace; any element the source
+/// produces is observed by every still-alive consumer in order. A
+/// consumer that lags behind sees the same prefix as a fast consumer,
+/// just later. This is the fan-out / pub-sub combinator: an
+/// observability tap can run in parallel with the main pipeline
+/// without forcing the source to be re-evaluated, which matters for
+/// resource-backed and otherwise non-replayable sources.
+///
+/// `n` MUST be `>= 1`. A `n < 1` is rejected at construction time
+/// with a panic per the `datastream` module-level invalid-argument
+/// policy.
+///
+/// **Buffer size:** the per-consumer queue is currently unbounded.
+/// A consumer that never pulls while another pulls aggressively will
+/// accumulate the entire stream in its queue; users with that risk
+/// should compose `broadcast(..., n) |> list.map(stream.take(_, k))`
+/// or its equivalent. A bounded variant with an explicit drop policy
+/// is left as a follow-up — see the Roadmap.
+///
+/// **Cross-target:** implemented via a small FFI-backed mutable
+/// reference (`datastream/internal/ref`). On Erlang the cell is a
+/// process-dictionary slot; on JavaScript it is a one-field mutable
+/// object. No `gleam_erlang` processes are spawned; no shared global
+/// state. The `Ref(_)` is local to each `broadcast` call.
+///
+/// **Close contract:** every consumer's `close` is recorded; the
+/// upstream is closed exactly once, on whichever call brings the
+/// active-consumer count to zero. If the upstream returns `Done`
+/// first it self-closes, and the close callbacks are no-ops.
+pub fn broadcast(over stream: Stream(a), into n: Int) -> List(Stream(a)) {
+  case n < 1 {
+    True -> panic as "datastream/stream.broadcast: n must be >= 1"
+    False -> {
+      let initial =
+        BroadcastState(
+          upstream: Some(stream),
+          queues: list.repeat([], times: n),
+          active: list.repeat(True, times: n),
+        )
+      let state_ref = ref.new(initial)
+      build_consumers(state_ref, n, [])
+    }
+  }
+}
+
+fn build_consumers(
+  state_ref: Ref(BroadcastState(a)),
+  remaining: Int,
+  acc: List(Stream(a)),
+) -> List(Stream(a)) {
+  case remaining {
+    0 -> acc
+    _ -> {
+      let consumer_id = remaining - 1
+      build_consumers(state_ref, consumer_id, [
+        broadcast_consumer(state_ref, consumer_id),
+        ..acc
+      ])
+    }
+  }
+}
+
+fn broadcast_consumer(
+  state_ref: Ref(BroadcastState(a)),
+  consumer_id: Int,
+) -> Stream(a) {
+  datastream.make(
+    pull: fn() { broadcast_pull(state_ref, consumer_id) },
+    close: fn() { broadcast_close(state_ref, consumer_id) },
+  )
+}
+
+fn broadcast_pull(
+  state_ref: Ref(BroadcastState(a)),
+  consumer_id: Int,
+) -> Step(a, Stream(a)) {
+  let state = ref.get(state_ref)
+  case list_at(state.queues, consumer_id) {
+    [head, ..tail] -> {
+      let new_queues = list_replace_at(state.queues, consumer_id, tail)
+      ref.set(
+        state_ref,
+        BroadcastState(
+          upstream: state.upstream,
+          queues: new_queues,
+          active: state.active,
+        ),
+      )
+      Next(head, broadcast_consumer(state_ref, consumer_id))
+    }
+    [] ->
+      case state.upstream {
+        None -> Done
+        Some(upstream) ->
+          case datastream.pull(upstream) {
+            Done -> {
+              ref.set(
+                state_ref,
+                BroadcastState(
+                  upstream: None,
+                  queues: state.queues,
+                  active: state.active,
+                ),
+              )
+              Done
+            }
+            Next(element, rest) -> {
+              let new_queues =
+                fanout_to_others(
+                  state.queues,
+                  state.active,
+                  consumer_id,
+                  element,
+                )
+              ref.set(
+                state_ref,
+                BroadcastState(
+                  upstream: Some(rest),
+                  queues: new_queues,
+                  active: state.active,
+                ),
+              )
+              Next(element, broadcast_consumer(state_ref, consumer_id))
+            }
+          }
+      }
+  }
+}
+
+fn broadcast_close(state_ref: Ref(BroadcastState(a)), consumer_id: Int) -> Nil {
+  let state = ref.get(state_ref)
+  let new_active = list_replace_at(state.active, consumer_id, False)
+  let any_active = list.any(new_active, fn(b) { b })
+  let cleared_queue = list_replace_at(state.queues, consumer_id, [])
+  case any_active, state.upstream {
+    True, _ ->
+      ref.set(
+        state_ref,
+        BroadcastState(
+          upstream: state.upstream,
+          queues: cleared_queue,
+          active: new_active,
+        ),
+      )
+    False, Some(upstream) -> {
+      datastream.close(upstream)
+      ref.set(
+        state_ref,
+        BroadcastState(
+          upstream: None,
+          queues: cleared_queue,
+          active: new_active,
+        ),
+      )
+    }
+    False, None ->
+      ref.set(
+        state_ref,
+        BroadcastState(
+          upstream: None,
+          queues: cleared_queue,
+          active: new_active,
+        ),
+      )
+  }
+}
+
+fn fanout_to_others(
+  queues: List(List(a)),
+  active: List(Bool),
+  skip_id: Int,
+  element: a,
+) -> List(List(a)) {
+  list.index_map(queues, fn(queue, index) {
+    case index == skip_id, list_at_bool(active, index) {
+      True, _ -> queue
+      False, False -> queue
+      False, True -> list.append(queue, [element])
+    }
+  })
+}
+
+fn list_at(xs: List(List(a)), index: Int) -> List(a) {
+  case xs, index {
+    [], _ -> []
+    [head, ..], 0 -> head
+    [_, ..rest], _ -> list_at(rest, index - 1)
+  }
+}
+
+fn list_at_bool(xs: List(Bool), index: Int) -> Bool {
+  case xs, index {
+    [], _ -> False
+    [head, ..], 0 -> head
+    [_, ..rest], _ -> list_at_bool(rest, index - 1)
+  }
+}
+
+fn list_replace_at(xs: List(b), index: Int, value: b) -> List(b) {
+  case xs, index {
+    [], _ -> []
+    [_, ..rest], 0 -> [value, ..rest]
+    [head, ..rest], _ -> [head, ..list_replace_at(rest, index - 1, value)]
+  }
+}
+
+/// Counterpart of `zip`: split a `Stream(#(a, b))` into a pair of
+/// independent component streams.
+///
+/// Both component streams see the same elements (left projections
+/// for the first, right projections for the second) in the same
+/// order. Each consumer pulls at its own pace, sharing the upstream
+/// via `broadcast` under the hood.
+///
+/// **Cross-target:** same FFI-backed shared state as `broadcast`,
+/// so `unzip` runs on both Erlang and JavaScript.
+///
+/// **Buffer size:** unbounded per consumer, inherited from
+/// `broadcast`. A pipeline that drives one half of the unzipped pair
+/// to completion while the other half stays unpulled will accumulate
+/// the entire stream in the lagging half's queue.
+pub fn unzip(stream: Stream(#(a, b))) -> #(Stream(a), Stream(b)) {
+  case broadcast(over: stream, into: 2) {
+    [left, right] -> #(
+      map(over: left, with: fn(p) { p.0 }),
+      map(over: right, with: fn(p) { p.1 }),
+    )
+    _ ->
+      panic as "datastream/stream.unzip: broadcast(_, 2) returned an unexpected shape"
   }
 }
 

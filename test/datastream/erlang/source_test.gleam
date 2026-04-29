@@ -57,6 +57,40 @@ pub fn from_subject_halts_when_keep_running_returns_false_test() {
   |> should.equal([])
 }
 
+// --- bridge_subject_stream (workaround for par/timeout incompatibility) ---
+
+@target(erlang)
+pub fn bridge_subject_stream_materialises_in_owning_process_test() {
+  let subject = process.new_subject()
+  process.spawn(fn() {
+    process.send(subject, 10)
+    process.send(subject, 20)
+    process.send(subject, 30)
+  })
+
+  // Drain the subject in this (owning) process via a take-bounded stream,
+  // then bridge into a list-backed Stream that is process-safe.
+  let bridged =
+    beam_source.from_subject(from: subject, while: fn() { True })
+    |> stream.take(up_to: 3)
+    |> beam_source.bridge_subject_stream
+
+  // The bridged stream survives composition with downstream combinators
+  // that may move pulls into worker processes (par.*, source.timeout).
+  bridged
+  |> fold.to_list
+  |> should.equal([10, 20, 30])
+}
+
+@target(erlang)
+pub fn bridge_subject_stream_preserves_empty_test() {
+  let subject = process.new_subject()
+  beam_source.from_subject(from: subject, while: fn() { False })
+  |> beam_source.bridge_subject_stream
+  |> fold.to_list
+  |> should.equal([])
+}
+
 // --- ticks / interval ---------------------------------------------------
 
 @target(erlang)

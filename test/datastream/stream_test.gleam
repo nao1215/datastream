@@ -512,6 +512,97 @@ pub fn interrupt_when_signal_wins_over_take_test() {
   |> should.equal([0, 1])
 }
 
+pub fn broadcast_two_consumers_see_same_elements_test() {
+  let assert [a, b] = stream.broadcast(over: from_list([1, 2, 3]), into: 2)
+  fold.to_list(a) |> should.equal([1, 2, 3])
+  fold.to_list(b) |> should.equal([1, 2, 3])
+}
+
+pub fn broadcast_consumer_one_partial_then_two_test() {
+  let assert [a, b] = stream.broadcast(over: from_list([1, 2, 3, 4]), into: 2)
+  a |> stream.take(up_to: 2) |> fold.to_list |> should.equal([1, 2])
+  fold.to_list(b) |> should.equal([1, 2, 3, 4])
+}
+
+pub fn broadcast_three_consumers_independent_pace_test() {
+  let assert [a, b, c] =
+    stream.broadcast(over: from_list([10, 20, 30, 40]), into: 3)
+  a |> fold.to_list |> should.equal([10, 20, 30, 40])
+  b |> stream.take(up_to: 2) |> fold.to_list |> should.equal([10, 20])
+  fold.to_list(c) |> should.equal([10, 20, 30, 40])
+}
+
+pub fn broadcast_one_consumer_is_identity_test() {
+  let assert [only] = stream.broadcast(over: from_list([1, 2, 3]), into: 1)
+  fold.to_list(only) |> should.equal([1, 2, 3])
+}
+
+pub fn broadcast_on_empty_yields_empty_consumers_test() {
+  let assert [a, b] = stream.broadcast(over: from_list([]), into: 2)
+  fold.to_list(a) |> should.equal([])
+  fold.to_list(b) |> should.equal([])
+}
+
+pub fn broadcast_consumer_with_take_zero_does_not_block_other_test() {
+  let assert [a, b] = stream.broadcast(over: from_list([1, 2, 3]), into: 2)
+  a |> stream.take(up_to: 0) |> fold.to_list |> should.equal([])
+  fold.to_list(b) |> should.equal([1, 2, 3])
+}
+
+@target(erlang)
+pub fn broadcast_zero_panics_test() {
+  let did_panic =
+    panicked(fn() {
+      let _result = stream.broadcast(over: from_list([1, 2, 3]), into: 0)
+      Nil
+    })
+  did_panic |> should.be_true
+}
+
+@target(erlang)
+pub fn broadcast_negative_panics_test() {
+  let did_panic =
+    panicked(fn() {
+      let _result = stream.broadcast(over: from_list([1, 2, 3]), into: -3)
+      Nil
+    })
+  did_panic |> should.be_true
+}
+
+pub fn unzip_round_trip_with_zip_test() {
+  let zipped = stream.zip(from_list([1, 2, 3]), from_list(["a", "b", "c"]))
+  let #(left, right) = stream.unzip(zipped)
+  fold.to_list(left) |> should.equal([1, 2, 3])
+  fold.to_list(right) |> should.equal(["a", "b", "c"])
+}
+
+pub fn unzip_on_empty_yields_empty_pair_test() {
+  let #(left, right) = stream.unzip(from_list([]))
+  fold.to_list(left) |> should.equal([])
+  fold.to_list(right) |> should.equal([])
+}
+
+pub fn unzip_left_first_then_right_test() {
+  let pairs = from_list([#(1, "a"), #(2, "b"), #(3, "c")])
+  let #(left, right) = stream.unzip(pairs)
+  fold.to_list(left) |> should.equal([1, 2, 3])
+  fold.to_list(right) |> should.equal(["a", "b", "c"])
+}
+
+pub fn unzip_right_first_then_left_test() {
+  let pairs = from_list([#(1, "a"), #(2, "b"), #(3, "c")])
+  let #(left, right) = stream.unzip(pairs)
+  fold.to_list(right) |> should.equal(["a", "b", "c"])
+  fold.to_list(left) |> should.equal([1, 2, 3])
+}
+
+pub fn unzip_partial_left_full_right_test() {
+  let pairs = from_list([#(1, "a"), #(2, "b"), #(3, "c"), #(4, "d")])
+  let #(left, right) = stream.unzip(pairs)
+  left |> stream.take(up_to: 2) |> fold.to_list |> should.equal([1, 2])
+  fold.to_list(right) |> should.equal(["a", "b", "c", "d"])
+}
+
 fn chunks_to_lists(stream_of_chunks) {
   stream_of_chunks
   |> fold.to_list

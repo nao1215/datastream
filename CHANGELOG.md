@@ -37,6 +37,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   Cross-target: pure-functional pull-state, no `gleam_erlang` /
   process / FFI dependency. Second sub-task of the Roadmap in
   #171. (#174)
+- **stream.broadcast(stream, n)** is a new fan-out combinator: it
+  splits a `Stream(a)` into `n` independent consumer streams that
+  share a single underlying source. Each consumer pulls at its own
+  pace; an element produced by the source is observed by every
+  still-alive consumer in order. Use it for the observability-tap
+  shape (one consumer drives the main pipeline, another writes
+  metrics or logs) without forcing the source to be re-evaluated,
+  which matters for resource-backed and otherwise non-replayable
+  sources. `n` must be `>= 1`; per-consumer queue is currently
+  unbounded — bounded variant with an explicit drop policy is
+  follow-up work. Cross-target via the new `internal/ref` mutable
+  cell (process-dictionary on Erlang, plain object on JavaScript).
+  Third sub-task of the Roadmap in #171. (#176)
+- **stream.unzip(stream)** splits a `Stream(#(a, b))` into a pair
+  `#(Stream(a), Stream(b))`, the counterpart of `stream.zip`. Built
+  on `broadcast` under the hood, so the same per-consumer
+  unbounded-queue caveat applies (a pipeline that drives one half
+  to completion while the other half lags accumulates the lagging
+  half's queue). Cross-target. Fourth sub-task of the Roadmap
+  in #171. (#177)
+- **datastream/erlang/source.bridge_subject_stream** is a
+  workaround helper for the `from_subject` × `par.*` / `time.*` /
+  `source.timeout` incompatibility documented on `from_subject`.
+  Materialises the upstream into a `List(a)` inside the calling
+  (subject-owning) process and reopens it as a process-safe
+  list-backed stream, which can then be composed with `par.*` /
+  `time.timeout` / `source.timeout` without triggering the BEAM
+  owner-only receive constraint. Caveat: buffers the entire
+  upstream in memory, so only suitable for bounded subjects.
+  BEAM-only. Closes the last open Roadmap follow-up in #171. (#178)
+
+### Internal
+
+- **datastream/internal/ref** is a small cross-target mutable cell
+  (`new(value)` / `get(ref)` / `set(ref, value)`). Process-
+  dictionary-backed on Erlang via `src/datastream_ref_ffi.erl` and
+  one-field-object-backed on JavaScript via
+  `src/datastream/internal/ref_ffi.mjs`. Internal to the library
+  — `internal_modules = ["datastream/internal/**"]` keeps it out
+  of the public surface and the generated docs. Required by
+  `broadcast` and `unzip` to share upstream and per-consumer queue
+  state across multiple consumer streams; pure-functional pull-
+  state cannot express that observation across separate stream
+  values without a mutable bridge.
 
 ## [0.5.0] - 2026-04-28
 
