@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-04-29
+
 ### Changed
 
 - **source.range** doc-comment now spells out that the function is
