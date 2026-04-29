@@ -592,6 +592,84 @@ fn buffer_fill(
   }
 }
 
+/// Terminate `stream` on the first `True` element from `signal`.
+///
+/// `interrupt_when` is the *external* counterpart of `take_while`:
+/// `take_while` ends a stream when a *pulled* element fails a
+/// predicate; `interrupt_when` ends it when an *unrelated* stream
+/// produces a fire signal — typically a timer expiry, a parent-
+/// shutdown probe, or a cancel-token bridge built with
+/// `from_subject`.
+///
+/// On every consumer pull, `signal` is checked first:
+///
+/// - `signal` yields `True` → both `stream` and the rest of
+///   `signal` are closed and the consumer sees `Done` immediately.
+/// - `signal` yields `False` → that signal element is consumed; the
+///   pull descends into `stream` and yields its next element.
+///   Subsequent consumer pulls see the rest of `signal`.
+/// - `signal` returns `Done` → the consumer pull descends into
+///   `stream`. `signal` is then ignored on subsequent pulls; a
+///   `Done` producer is never re-pulled per the `Step` contract.
+///
+/// The `Stream(Bool)` shape (rather than `Stream(Nil)`) is what
+/// makes counted / time-based signals representable in the pull
+/// model — `Done` cannot mean "not yet, ask again later" because
+/// `Done` is terminal, so a "fire after N consumer pulls" signal
+/// is built as `False`-stream-of-length-N followed by `True`.
+///
+/// **Close ordering:** on consumer-side early termination `signal`
+/// is closed first, then `stream` — right-before-left, matching
+/// `zip` and `flat_map`.
+pub fn interrupt_when(
+  in stream: Stream(a),
+  signal signal: Stream(Bool),
+) -> Stream(a) {
+  interrupt_active(stream, Some(signal))
+}
+
+fn interrupt_active(
+  stream: Stream(a),
+  signal: Option(Stream(Bool)),
+) -> Stream(a) {
+  datastream.make(pull: fn() { interrupt_pull(stream, signal) }, close: fn() {
+    case signal {
+      Some(sig) -> datastream.close(sig)
+      None -> Nil
+    }
+    datastream.close(stream)
+  })
+}
+
+fn interrupt_pull(
+  stream: Stream(a),
+  signal: Option(Stream(Bool)),
+) -> Step(a, Stream(a)) {
+  case signal {
+    None -> interrupt_pull_stream(stream, None)
+    Some(sig) ->
+      case datastream.pull(sig) {
+        Next(True, sig_rest) -> {
+          datastream.close(sig_rest)
+          datastream.close(stream)
+          Done
+        }
+        Next(False, sig_rest) -> interrupt_pull_stream(stream, Some(sig_rest))
+        Done -> interrupt_pull_stream(stream, None)
+      }
+  }
+}
+
+fn interrupt_pull_stream(
+  stream: Stream(a),
+  signal: Option(Stream(Bool)),
+) -> Step(a, Stream(a)) {
+  case datastream.pull(stream) {
+    Next(element, rest) -> Next(element, interrupt_active(rest, signal))
+    Done -> Done
+  }
+}
+
 // --- chunked operations -----------------------------------------------------
 
 /// Group adjacent elements into fixed-size chunks.

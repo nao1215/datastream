@@ -20,6 +20,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   Pure-functional pull-state implementation with no `gleam_erlang`
   / process / FFI dependency, so it runs on both the Erlang and
   JavaScript targets. First sub-task of the Roadmap in #171. (#172)
+- **stream.interrupt_when(stream, signal:)** is a new combinator
+  that terminates `stream` on the first `True` element from
+  `signal`. The signal is `Stream(Bool)` (not `Stream(Nil)` as the
+  Roadmap originally proposed) — the boolean carries the
+  not-yet / fire-now distinction that `Done` cannot in a pull-based
+  model where `Done` is terminal. On every consumer pull the signal
+  is checked first: a `True` element closes both the rest of the
+  signal and `stream` and yields `Done`; a `False` element is
+  consumed and the pull descends into `stream`; a `Done` from the
+  signal switches the combinator into a pass-through over `stream`
+  (the signal is never re-pulled, matching the `Step` contract).
+  Counterpart of `take_while` for *external* termination signals
+  (timer expiry, parent-shutdown probe, cancel-token bridge) where
+  the decision to stop doesn't depend on the pulled element.
+  Cross-target: pure-functional pull-state, no `gleam_erlang` /
+  process / FFI dependency. Second sub-task of the Roadmap in
+  #171. (#174)
 
 ## [0.5.0] - 2026-04-28
 

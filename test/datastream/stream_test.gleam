@@ -436,6 +436,82 @@ pub fn buffer_negative_panics_test() {
   did_panic |> should.be_true
 }
 
+fn signal_after(n: Int) -> Stream(Bool) {
+  // Yields False for the first `n` pulls, then True forever.
+  datastream.unfold(from: 0, with: fn(count) {
+    case count >= n {
+      True -> Next(element: True, state: count + 1)
+      False -> Next(element: False, state: count + 1)
+    }
+  })
+}
+
+fn signal_never() -> Stream(Bool) {
+  datastream.unfold(from: Nil, with: fn(_) { Done })
+}
+
+fn signal_immediate() -> Stream(Bool) {
+  signal_after(0)
+}
+
+pub fn interrupt_when_immediate_signal_yields_empty_test() {
+  from_list([1, 2, 3])
+  |> stream.interrupt_when(signal: signal_immediate())
+  |> fold.to_list
+  |> should.equal([])
+}
+
+pub fn interrupt_when_signal_never_is_identity_test() {
+  from_list([1, 2, 3])
+  |> stream.interrupt_when(signal: signal_never())
+  |> fold.to_list
+  |> should.equal([1, 2, 3])
+}
+
+pub fn interrupt_when_signal_fires_after_one_pull_test() {
+  iterate(0, with: fn(n) { n + 1 })
+  |> stream.interrupt_when(signal: signal_after(1))
+  |> fold.to_list
+  |> should.equal([0])
+}
+
+pub fn interrupt_when_signal_fires_after_three_pulls_test() {
+  iterate(0, with: fn(n) { n + 1 })
+  |> stream.interrupt_when(signal: signal_after(3))
+  |> fold.to_list
+  |> should.equal([0, 1, 2])
+}
+
+pub fn interrupt_when_on_empty_stream_yields_empty_test() {
+  from_list([])
+  |> stream.interrupt_when(signal: signal_immediate())
+  |> fold.to_list
+  |> should.equal([])
+}
+
+pub fn interrupt_when_on_empty_stream_with_dead_signal_yields_empty_test() {
+  from_list([])
+  |> stream.interrupt_when(signal: signal_never())
+  |> fold.to_list
+  |> should.equal([])
+}
+
+pub fn interrupt_when_composes_with_take_test() {
+  iterate(0, with: fn(n) { n + 1 })
+  |> stream.interrupt_when(signal: signal_after(10))
+  |> stream.take(up_to: 4)
+  |> fold.to_list
+  |> should.equal([0, 1, 2, 3])
+}
+
+pub fn interrupt_when_signal_wins_over_take_test() {
+  iterate(0, with: fn(n) { n + 1 })
+  |> stream.interrupt_when(signal: signal_after(2))
+  |> stream.take(up_to: 100)
+  |> fold.to_list
+  |> should.equal([0, 1])
+}
+
 fn chunks_to_lists(stream_of_chunks) {
   stream_of_chunks
   |> fold.to_list
