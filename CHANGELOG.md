@@ -18,6 +18,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   misleading for users who expected `gleam/yielder.range` semantics
   since `Stream(a)` is the closer analog of `Yielder(a)`. Behaviour
   unchanged. (#181)
+- **source.resource / source.try_resource** doc-comment now states
+  explicitly that `close` only runs when `open` ran first. With
+  lazy-open semantics, terminals that never trigger a pull (notably
+  `stream.take(up_to: 0)`) skip both `open` and `close`. The previous
+  wording promised `close` on every termination path including
+  `stream.take`, which was misleading for the degenerate `take(0)`
+  case. A close callback that needs to run unconditionally must be
+  arranged at a higher level than the `Stream`. Behaviour unchanged.
+  (#182)
 
 ## [0.6.0] - 2026-04-29
 

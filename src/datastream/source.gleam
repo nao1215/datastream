@@ -200,12 +200,20 @@ pub type ResourceError(open_error, next_error) {
 /// begins. Each terminal call re-runs `open`: a `Stream` is a pipeline
 /// definition, not a one-shot iterator.
 ///
-/// `close` is honoured on every termination path the library controls:
-/// normal end (when `next` returns `Done`), downstream early-exit
-/// (`stream.take`, `stream.take_while`), early-exit folds (`fold.first`,
-/// `fold.find`, `fold.any`, `fold.all`, `fold.collect_result`), and
-/// `sink.try_each` failure. Termination caused by user-code panicking
-/// is best-effort.
+/// `close` is honoured on every termination path the library controls
+/// — *provided `open` has run*. With lazy-open semantics, terminals
+/// that never pull (`stream.take(up_to: 0)`, an `interrupt_when`
+/// signal that fires before the first pull, etc.) skip both `open`
+/// and `close`: there is no opened state, so there is nothing to
+/// close. A close callback that needs to run unconditionally must be
+/// arranged at a higher level than the `Stream`.
+///
+/// When `open` *has* run, the termination paths covered are: normal
+/// end (when `next` returns `Done`), downstream early-exit
+/// (`stream.take`, `stream.take_while`), early-exit folds
+/// (`fold.first`, `fold.find`, `fold.any`, `fold.all`,
+/// `fold.collect_result`), and `sink.try_each` failure. Termination
+/// caused by user-code panicking is best-effort.
 ///
 /// `close` returns `Nil`. Errors that happen at close time are not
 /// propagated through the terminal's return value; callers that must
@@ -234,7 +242,9 @@ pub fn resource(
 ///   `close(state)`.
 ///
 /// Lazy: `open` runs on the first pull, NOT at construction. Each
-/// terminal call re-attempts `open`.
+/// terminal call re-attempts `open`. As with `resource`, terminals
+/// that never trigger a pull (`stream.take(up_to: 0)` and similar)
+/// skip both `open` and `close`.
 ///
 /// Downstream sees a single `Stream(Result(a, ResourceError(o, n)))`,
 /// so `fold.collect_result` and `fold.partition_result` work without
