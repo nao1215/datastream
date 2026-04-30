@@ -11,6 +11,29 @@
 import datastream.{type Step, type Stream, Done, Next}
 import gleam/bit_array
 
+// --- argument validation --------------------------------------------------
+
+/// Why a checked binary framing constructor refused its argument.
+///
+/// Returned by `length_prefixed_checked`, `length_prefixed_with_checked`,
+/// and `fixed_size_checked`. Lets the caller surface argument
+/// validation failures through `Result` instead of crashing the
+/// process — useful when the numeric argument comes from CLI flags,
+/// config files, or request parameters.
+///
+/// `function` names the constructor that rejected the value
+/// (`"length_prefixed"`, `"fixed_size"`) so a caller routing many
+/// checked constructors through the same handler can produce a
+/// meaningful error message.
+pub type BinaryArgError {
+  /// `length_prefixed` requires `prefix_size` to be one of
+  /// `{1, 2, 4, 8}`. `given` is the value the caller passed.
+  InvalidPrefixSize(function: String, given: Int)
+  /// `fixed_size` requires `size` to be `>= 1`. `given` is the value
+  /// the caller passed.
+  NotPositiveSize(function: String, given: Int)
+}
+
 // --- bytes ----------------------------------------------------------------
 
 /// Yield each byte of each chunk in order, as `Int` in `0..255`.
@@ -123,6 +146,50 @@ pub fn length_prefixed_with(
       length_prefixed_active(stream, <<>>, prefix_size, max_frame_size, False)
     _ ->
       panic as "datastream/binary.length_prefixed: prefix_size must be 1, 2, 4, or 8"
+  }
+}
+
+/// Like `length_prefixed`, but returns the argument-validation
+/// failure as a `Result` instead of panicking. Use this when
+/// `prefix_size` comes from dynamic input (CLI, config, request
+/// parameters); the panicking `length_prefixed` remains the right
+/// tool for trusted constants.
+///
+/// On success the stream behaves identically to
+/// `length_prefixed(over: stream, prefix_size: prefix_size)`.
+///
+/// The caller is responsible for closing `stream` if the
+/// constructor returns `Error`.
+pub fn length_prefixed_checked(
+  over stream: Stream(BitArray),
+  prefix_size prefix_size: Int,
+) -> Result(Stream(Result(BitArray, IncompleteFrame)), BinaryArgError) {
+  length_prefixed_with_checked(
+    over: stream,
+    prefix_size: prefix_size,
+    max_frame_size: default_max_frame_size,
+  )
+}
+
+/// Like `length_prefixed_with`, but returns the argument-validation
+/// failure as a `Result` instead of panicking. Use this when
+/// `prefix_size` comes from dynamic input.
+pub fn length_prefixed_with_checked(
+  over stream: Stream(BitArray),
+  prefix_size prefix_size: Int,
+  max_frame_size max_frame_size: Int,
+) -> Result(Stream(Result(BitArray, IncompleteFrame)), BinaryArgError) {
+  case prefix_size {
+    1 | 2 | 4 | 8 ->
+      Ok(length_prefixed_active(
+        stream,
+        <<>>,
+        prefix_size,
+        max_frame_size,
+        False,
+      ))
+    _ ->
+      Error(InvalidPrefixSize(function: "length_prefixed", given: prefix_size))
   }
 }
 
@@ -454,6 +521,26 @@ pub fn fixed_size(
   case size >= 1 {
     True -> fixed_size_active(stream, <<>>, size, False)
     False -> panic as "datastream/binary.fixed_size: size must be >= 1"
+  }
+}
+
+/// Like `fixed_size`, but returns the argument-validation failure as
+/// a `Result` instead of panicking. Use this when `size` comes from
+/// dynamic input (CLI, config, request parameters); the panicking
+/// `fixed_size` remains the right tool for trusted constants.
+///
+/// On success the stream behaves identically to
+/// `fixed_size(over: stream, size: size)`.
+///
+/// The caller is responsible for closing `stream` if the
+/// constructor returns `Error`.
+pub fn fixed_size_checked(
+  over stream: Stream(BitArray),
+  size size: Int,
+) -> Result(Stream(BitArray), BinaryArgError) {
+  case size >= 1 {
+    True -> Ok(fixed_size_active(stream, <<>>, size, False))
+    False -> Error(NotPositiveSize(function: "fixed_size", given: size))
   }
 }
 

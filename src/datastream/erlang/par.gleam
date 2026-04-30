@@ -115,6 +115,35 @@ import gleam/option.{type Option, None, Some}
 // --- common argument validation --------------------------------------------
 
 @target(erlang)
+/// Why a checked `par.*` constructor refused its arguments.
+///
+/// Returned by `map_unordered_with_checked`,
+/// `map_ordered_with_checked`, `each_unordered_with_checked`,
+/// `each_ordered_with_checked`, and `merge_with_checked`. Lets the
+/// caller surface argument-validation failures through `Result`
+/// instead of crashing the process — useful when the numeric
+/// arguments come from CLI flags, config files, or request
+/// parameters.
+///
+/// `function` names the constructor that rejected the value
+/// (`"map_unordered_with"`, `"map_ordered_with"`,
+/// `"each_unordered_with"`, `"each_ordered_with"`, `"merge_with"`)
+/// so a caller routing many checked constructors through the same
+/// handler can produce a meaningful error message.
+pub type ParArgError {
+  /// `max_workers` was less than 1. `given` is the value the caller
+  /// passed.
+  InvalidMaxWorkers(function: String, given: Int)
+  /// `max_buffer` was less than `max_workers` for `map_*_with` /
+  /// `each_*_with`. Both values are reported so the caller can fix
+  /// either side.
+  BufferLessThanWorkers(function: String, max_workers: Int, max_buffer: Int)
+  /// `max_buffer` was less than 1 for `merge_with`. `given` is the
+  /// value the caller passed.
+  InvalidMaxBuffer(function: String, given: Int)
+}
+
+@target(erlang)
 fn validate_par_args(max_workers: Int, max_buffer: Int) -> Nil {
   case max_workers >= 1 {
     True -> Nil
@@ -127,10 +156,39 @@ fn validate_par_args(max_workers: Int, max_buffer: Int) -> Nil {
 }
 
 @target(erlang)
+fn check_par_args(
+  function: String,
+  max_workers: Int,
+  max_buffer: Int,
+) -> Result(Nil, ParArgError) {
+  case max_workers >= 1 {
+    False -> Error(InvalidMaxWorkers(function: function, given: max_workers))
+    True ->
+      case max_buffer >= max_workers {
+        False ->
+          Error(BufferLessThanWorkers(
+            function: function,
+            max_workers: max_workers,
+            max_buffer: max_buffer,
+          ))
+        True -> Ok(Nil)
+      }
+  }
+}
+
+@target(erlang)
 fn validate_buffer(max_buffer: Int) -> Nil {
   case max_buffer >= 1 {
     True -> Nil
     False -> panic as "datastream/erlang/par.merge: max_buffer must be >= 1"
+  }
+}
+
+@target(erlang)
+fn check_buffer(function: String, max_buffer: Int) -> Result(Nil, ParArgError) {
+  case max_buffer >= 1 {
+    True -> Ok(Nil)
+    False -> Error(InvalidMaxBuffer(function: function, given: max_buffer))
   }
 }
 
@@ -193,6 +251,44 @@ pub fn map_unordered_with(
     result_subject: result_subject,
     source_drained: False,
   ))
+}
+
+@target(erlang)
+/// Like `map_unordered_with`, but returns the argument-validation
+/// failure as a `Result` instead of panicking. Use this when
+/// `max_workers` or `max_buffer` come from dynamic input (CLI,
+/// config, request parameters); the panicking `map_unordered_with`
+/// remains the right tool for trusted constants.
+///
+/// On success the stream behaves identically to
+/// `map_unordered_with(over: stream, with: f, max_workers: ...,
+/// max_buffer: ...)`.
+///
+/// The caller is responsible for closing `stream` if the
+/// constructor returns `Error`.
+pub fn map_unordered_with_checked(
+  over stream: Stream(a),
+  with f: fn(a) -> b,
+  max_workers max_workers: Int,
+  max_buffer max_buffer: Int,
+) -> Result(Stream(b), ParArgError) {
+  case check_par_args("map_unordered_with", max_workers, max_buffer) {
+    Error(e) -> Error(e)
+    Ok(Nil) -> {
+      let result_subject = process.new_subject()
+      Ok(
+        build_map_unordered_stream(MapUnordered(
+          source: stream,
+          f: f,
+          max_workers: max_workers,
+          max_buffer: max_buffer,
+          workers_busy: 0,
+          result_subject: result_subject,
+          source_drained: False,
+        )),
+      )
+    }
+  }
 }
 
 @target(erlang)
@@ -360,6 +456,48 @@ pub fn map_ordered_with(
 }
 
 @target(erlang)
+/// Like `map_ordered_with`, but returns the argument-validation
+/// failure as a `Result` instead of panicking. Use this when
+/// `max_workers` or `max_buffer` come from dynamic input (CLI,
+/// config, request parameters); the panicking `map_ordered_with`
+/// remains the right tool for trusted constants.
+///
+/// On success the stream behaves identically to
+/// `map_ordered_with(over: stream, with: f, max_workers: ...,
+/// max_buffer: ...)`.
+///
+/// The caller is responsible for closing `stream` if the
+/// constructor returns `Error`.
+pub fn map_ordered_with_checked(
+  over stream: Stream(a),
+  with f: fn(a) -> b,
+  max_workers max_workers: Int,
+  max_buffer max_buffer: Int,
+) -> Result(Stream(b), ParArgError) {
+  case check_par_args("map_ordered_with", max_workers, max_buffer) {
+    Error(e) -> Error(e)
+    Ok(Nil) -> {
+      let result_subject = process.new_subject()
+      Ok(
+        build_map_ordered_stream(MapOrdered(
+          source: stream,
+          f: f,
+          max_workers: max_workers,
+          max_buffer: max_buffer,
+          workers_busy: 0,
+          in_flight: 0,
+          next_dispatch_index: 0,
+          next_emit_index: 0,
+          result_subject: result_subject,
+          pending: dict.new(),
+          source_drained: False,
+        )),
+      )
+    }
+  }
+}
+
+@target(erlang)
 fn build_map_ordered_stream(state: MapOrdered(a, b)) -> Stream(b) {
   datastream.make(pull: fn() { map_ordered_step(state) }, close: fn() {
     map_ordered_close(state)
@@ -508,6 +646,31 @@ pub fn each_ordered_with(
 }
 
 @target(erlang)
+/// Like `each_ordered_with`, but returns the argument-validation
+/// failure as a `Result` instead of panicking. The effect runs only
+/// when the arguments validate; on `Error` no upstream pull happens
+/// and the caller is responsible for closing `stream`.
+pub fn each_ordered_with_checked(
+  over stream: Stream(a),
+  with effect: fn(a) -> Nil,
+  max_workers max_workers: Int,
+  max_buffer max_buffer: Int,
+) -> Result(Nil, ParArgError) {
+  case check_par_args("each_ordered_with", max_workers, max_buffer) {
+    Error(e) -> Error(e)
+    Ok(Nil) -> {
+      each_ordered_with(
+        over: stream,
+        with: effect,
+        max_workers: max_workers,
+        max_buffer: max_buffer,
+      )
+      Ok(Nil)
+    }
+  }
+}
+
+@target(erlang)
 /// Side-effect-only variant of `map_unordered`. Uses
 /// `default_max_workers` and `default_max_buffer`.
 pub fn each_unordered(over stream: Stream(a), with effect: fn(a) -> Nil) -> Nil {
@@ -537,6 +700,31 @@ pub fn each_unordered_with(
     max_buffer: max_buffer,
   )
   |> fold.drain
+}
+
+@target(erlang)
+/// Like `each_unordered_with`, but returns the argument-validation
+/// failure as a `Result` instead of panicking. The effect runs only
+/// when the arguments validate; on `Error` no upstream pull happens
+/// and the caller is responsible for closing `stream`.
+pub fn each_unordered_with_checked(
+  over stream: Stream(a),
+  with effect: fn(a) -> Nil,
+  max_workers max_workers: Int,
+  max_buffer max_buffer: Int,
+) -> Result(Nil, ParArgError) {
+  case check_par_args("each_unordered_with", max_workers, max_buffer) {
+    Error(e) -> Error(e)
+    Ok(Nil) -> {
+      each_unordered_with(
+        over: stream,
+        with: effect,
+        max_workers: max_workers,
+        max_buffer: max_buffer,
+      )
+      Ok(Nil)
+    }
+  }
 }
 
 // --- merge ---------------------------------------------------------------
@@ -600,6 +788,33 @@ pub fn merge_with(
   max_buffer max_buffer: Int,
 ) -> Stream(a) {
   validate_buffer(max_buffer)
+  merge_with_unchecked(streams, max_buffer)
+}
+
+@target(erlang)
+/// Like `merge_with`, but returns the argument-validation failure
+/// as a `Result` instead of panicking. Use this when `max_buffer`
+/// comes from dynamic input (CLI, config, request parameters); the
+/// panicking `merge_with` remains the right tool for trusted
+/// constants.
+///
+/// On success the stream behaves identically to
+/// `merge_with(streams: streams, max_buffer: max_buffer)`.
+///
+/// The caller is responsible for closing each stream in `streams`
+/// if the constructor returns `Error`.
+pub fn merge_with_checked(
+  streams streams: List(Stream(a)),
+  max_buffer max_buffer: Int,
+) -> Result(Stream(a), ParArgError) {
+  case check_buffer("merge_with", max_buffer) {
+    Error(e) -> Error(e)
+    Ok(Nil) -> Ok(merge_with_unchecked(streams, max_buffer))
+  }
+}
+
+@target(erlang)
+fn merge_with_unchecked(streams: List(Stream(a)), max_buffer: Int) -> Stream(a) {
   let result_subj = process.new_subject()
   let coordinator_pid = process.self()
   let all_signals =

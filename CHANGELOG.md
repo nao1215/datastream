@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **stream**: `stream.buffer_checked` and `stream.chunks_of_checked`
+  return `Result(Stream(_), StreamArgError)` instead of panicking
+  on a non-positive argument. Use these when `capacity` / `size`
+  comes from dynamic input (CLI, config, request parameters); the
+  panicking `stream.buffer` and `stream.chunks_of` remain the right
+  tool for trusted constants. `StreamArgError` gains a `NotPositive`
+  variant for the new "must be `>= 1`" contract. (#189)
+- **binary**: `binary.length_prefixed_checked`,
+  `binary.length_prefixed_with_checked`, and
+  `binary.fixed_size_checked` provide non-panicking variants of the
+  framing constructors. The new `BinaryArgError` type exposes
+  `InvalidPrefixSize` (for `prefix_size ∉ {1, 2, 4, 8}`) and
+  `NotPositiveSize` (for `size < 1`). (#189)
+- **erlang/par**: `par.map_unordered_with_checked`,
+  `par.map_ordered_with_checked`, `par.each_unordered_with_checked`,
+  `par.each_ordered_with_checked`, and `par.merge_with_checked`
+  provide non-panicking variants of the parallel constructors. The
+  new `ParArgError` type exposes `InvalidMaxWorkers`,
+  `BufferLessThanWorkers`, and `InvalidMaxBuffer` so callers can
+  diagnose which side of the contract failed. (#189)
+- **README**: a "Trusted vs. untrusted constructor inputs" subsection
+  documents the split and points dynamic-input callers at the
+  `*_checked` variants. (#189)
+
 ## [0.8.0] - 2026-04-30
 
 ### Added

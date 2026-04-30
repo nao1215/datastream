@@ -290,6 +290,70 @@ pub fn fixed_size_panics_on_negative_size_test() {
   did_panic |> should.be_true
 }
 
+// --- checked variants (#189) -------------------------------------------
+
+pub fn length_prefixed_checked_ok_decodes_one_byte_prefix_test() {
+  let assert Ok(s) =
+    binary.length_prefixed_checked(
+      over: from_list([<<2, 1, 2, 1, 3>>]),
+      prefix_size: 1,
+    )
+  s |> fold.to_list |> should.equal([Ok(<<1, 2>>), Ok(<<3>>)])
+}
+
+pub fn length_prefixed_checked_rejects_three_byte_prefix_test() {
+  let assert Error(binary.InvalidPrefixSize(function: name, given: g)) =
+    binary.length_prefixed_checked(over: from_list([<<>>]), prefix_size: 3)
+  name |> should.equal("length_prefixed")
+  g |> should.equal(3)
+}
+
+pub fn length_prefixed_checked_rejects_zero_prefix_test() {
+  let assert Error(binary.InvalidPrefixSize(function: _, given: g)) =
+    binary.length_prefixed_checked(over: from_list([<<>>]), prefix_size: 0)
+  g |> should.equal(0)
+}
+
+pub fn length_prefixed_with_checked_ok_decodes_one_byte_prefix_test() {
+  let assert Ok(s) =
+    binary.length_prefixed_with_checked(
+      over: from_list([<<2, 1, 2>>]),
+      prefix_size: 1,
+      max_frame_size: 64,
+    )
+  s |> fold.to_list |> should.equal([Ok(<<1, 2>>)])
+}
+
+pub fn length_prefixed_with_checked_rejects_invalid_prefix_test() {
+  let assert Error(binary.InvalidPrefixSize(function: name, given: g)) =
+    binary.length_prefixed_with_checked(
+      over: from_list([<<>>]),
+      prefix_size: 5,
+      max_frame_size: 64,
+    )
+  name |> should.equal("length_prefixed")
+  g |> should.equal(5)
+}
+
+pub fn fixed_size_checked_ok_matches_fixed_size_test() {
+  let assert Ok(s) =
+    binary.fixed_size_checked(over: from_list([<<1, 2, 3, 4, 5, 6>>]), size: 2)
+  s |> fold.to_list |> should.equal([<<1, 2>>, <<3, 4>>, <<5, 6>>])
+}
+
+pub fn fixed_size_checked_rejects_zero_test() {
+  let assert Error(binary.NotPositiveSize(function: name, given: g)) =
+    binary.fixed_size_checked(over: from_list([<<>>]), size: 0)
+  name |> should.equal("fixed_size")
+  g |> should.equal(0)
+}
+
+pub fn fixed_size_checked_rejects_negative_test() {
+  let assert Error(binary.NotPositiveSize(function: _, given: g)) =
+    binary.fixed_size_checked(over: from_list([<<>>]), size: -3)
+  g |> should.equal(-3)
+}
+
 // --- Issue #158: FrameTooLarge on oversized prefix claims ---
 
 pub fn length_prefixed_rejects_oversized_frame_claim_test() {
