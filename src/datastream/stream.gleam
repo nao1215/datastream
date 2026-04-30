@@ -116,6 +116,68 @@ pub fn drop(from stream: Stream(a), up_to n: Int) -> Stream(a) {
   }
 }
 
+/// Why a checked stream constructor refused its argument.
+///
+/// Returned by `take_checked`, `drop_checked`, and any future
+/// non-panicking variant of a constructor that would otherwise
+/// reject its argument with a `panic`. Lets the caller surface
+/// argument-validation failures through `Result` instead of
+/// crashing the process — useful when the numeric argument comes
+/// from CLI flags, config files, or request parameters.
+///
+/// `function` names the constructor that rejected the value
+/// (`"take"`, `"drop"`, ...) so a caller routing many checked
+/// constructors through the same handler can produce a meaningful
+/// error message.
+pub type StreamArgError {
+  NegativeCount(function: String, given: Int)
+}
+
+/// Like `take`, but returns the argument-validation failure as a
+/// `Result` instead of panicking. Use this when `n` comes from
+/// dynamic input (CLI, config, request parameters).
+///
+/// On success the stream behaves identically to
+/// `take(from: stream, up_to: n)`.
+///
+/// The caller is responsible for closing `stream` if the
+/// constructor returns `Error` — no upstream pull happens, but the
+/// upstream is otherwise untouched.
+///
+/// Example:
+///   case stream.take_checked(from: src, up_to: configured_limit) {
+///     Ok(s) -> ...
+///     Error(stream.NegativeCount(function: _, given: g)) -> ...
+///   }
+pub fn take_checked(
+  from stream: Stream(a),
+  up_to n: Int,
+) -> Result(Stream(a), StreamArgError) {
+  case n < 0 {
+    True -> Error(NegativeCount(function: "take", given: n))
+    False -> Ok(take_active(stream, n))
+  }
+}
+
+/// Like `drop`, but returns the argument-validation failure as a
+/// `Result` instead of panicking. Use this when `n` comes from
+/// dynamic input.
+///
+/// On success the stream behaves identically to
+/// `drop(from: stream, up_to: n)`.
+///
+/// The caller is responsible for closing `stream` if the
+/// constructor returns `Error`.
+pub fn drop_checked(
+  from stream: Stream(a),
+  up_to n: Int,
+) -> Result(Stream(a), StreamArgError) {
+  case n < 0 {
+    True -> Error(NegativeCount(function: "drop", given: n))
+    False -> Ok(drop_active(stream, n))
+  }
+}
+
 fn drop_active(stream: Stream(a), n: Int) -> Stream(a) {
   datastream.make(pull: fn() { drop_pull(stream, n) }, close: fn() {
     datastream.close(stream)

@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **stream**: `stream.take_checked` and `stream.drop_checked` return
+  `Result(Stream(a), StreamArgError)` instead of panicking on a
+  negative count. Use these for the dynamic-input path (CLI, config,
+  request parameters); the panicking `stream.take` and `stream.drop`
+  remain the right tool for trusted constants. `StreamArgError` is
+  exposed as a public type with the `NegativeCount(function:, given:)`
+  variant so callers can route many checked constructors through a
+  single handler with meaningful diagnostics. (#189)
+
 ## [0.7.0] - 2026-04-29
 
 ### Changed
