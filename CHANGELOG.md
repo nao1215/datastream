@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-04-30
+
 ### Added
 
 - **examples**: `test/examples/` ships five compile-checked
