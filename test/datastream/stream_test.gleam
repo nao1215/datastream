@@ -134,6 +134,41 @@ pub fn drop_more_than_available_yields_empty_test() {
   |> should.equal([])
 }
 
+pub fn take_checked_ok_matches_take_test() {
+  let assert Ok(s) = stream.take_checked(from: from_list([1, 2, 3]), up_to: 2)
+  s |> fold.to_list |> should.equal([1, 2])
+}
+
+pub fn take_checked_zero_yields_empty_test() {
+  let assert Ok(s) = stream.take_checked(from: from_list([1, 2, 3]), up_to: 0)
+  s |> fold.to_list |> should.equal([])
+}
+
+pub fn take_checked_negative_returns_error_test() {
+  case stream.take_checked(from: from_list([1, 2, 3]), up_to: -5) {
+    Ok(_) -> should.fail()
+    Error(stream.NegativeCount(function: name, given: g)) -> {
+      name |> should.equal("take")
+      g |> should.equal(-5)
+    }
+  }
+}
+
+pub fn drop_checked_ok_matches_drop_test() {
+  let assert Ok(s) = stream.drop_checked(from: from_list([1, 2, 3]), up_to: 1)
+  s |> fold.to_list |> should.equal([2, 3])
+}
+
+pub fn drop_checked_negative_returns_error_test() {
+  case stream.drop_checked(from: from_list([1, 2, 3]), up_to: -3) {
+    Ok(_) -> should.fail()
+    Error(stream.NegativeCount(function: name, given: g)) -> {
+      name |> should.equal("drop")
+      g |> should.equal(-3)
+    }
+  }
+}
+
 pub fn take_while_yields_longest_passing_prefix_test() {
   from_list([1, 2, 1, 4])
   |> stream.take_while(satisfying: fn(x) { x < 3 })
