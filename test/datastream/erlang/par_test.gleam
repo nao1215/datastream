@@ -546,6 +546,186 @@ pub fn merge_with_panics_on_zero_max_buffer_test() {
   did_panic |> should.be_true
 }
 
+// --- checked variants (#189) -------------------------------------------
+
+@target(erlang)
+pub fn map_unordered_with_checked_ok_matches_unchecked_test() {
+  let assert Ok(s) =
+    par.map_unordered_with_checked(
+      source.from_list([1, 2, 3]),
+      with: fn(x) { x * 2 },
+      max_workers: 2,
+      max_buffer: 4,
+    )
+  let result = s |> fold.to_list
+  list.sort(result, by: int_compare) |> should.equal([2, 4, 6])
+}
+
+@target(erlang)
+pub fn map_unordered_with_checked_rejects_zero_max_workers_test() {
+  let assert Error(par.InvalidMaxWorkers(function: name, given: g)) =
+    par.map_unordered_with_checked(
+      source.from_list([1]),
+      with: fn(x) { x },
+      max_workers: 0,
+      max_buffer: 4,
+    )
+  name |> should.equal("map_unordered_with")
+  g |> should.equal(0)
+}
+
+@target(erlang)
+pub fn map_unordered_with_checked_rejects_buffer_below_workers_test() {
+  let assert Error(par.BufferLessThanWorkers(
+    function: name,
+    max_workers: w,
+    max_buffer: b,
+  )) =
+    par.map_unordered_with_checked(
+      source.from_list([1]),
+      with: fn(x) { x },
+      max_workers: 4,
+      max_buffer: 2,
+    )
+  name |> should.equal("map_unordered_with")
+  w |> should.equal(4)
+  b |> should.equal(2)
+}
+
+@target(erlang)
+pub fn map_ordered_with_checked_ok_matches_unchecked_test() {
+  let assert Ok(s) =
+    par.map_ordered_with_checked(
+      source.from_list([1, 2, 3]),
+      with: fn(x) { x * 10 },
+      max_workers: 2,
+      max_buffer: 4,
+    )
+  s |> fold.to_list |> should.equal([10, 20, 30])
+}
+
+@target(erlang)
+pub fn map_ordered_with_checked_rejects_negative_max_workers_test() {
+  let assert Error(par.InvalidMaxWorkers(function: name, given: g)) =
+    par.map_ordered_with_checked(
+      source.from_list([1]),
+      with: fn(x) { x },
+      max_workers: -1,
+      max_buffer: 4,
+    )
+  name |> should.equal("map_ordered_with")
+  g |> should.equal(-1)
+}
+
+@target(erlang)
+pub fn map_ordered_with_checked_rejects_buffer_below_workers_test() {
+  let assert Error(par.BufferLessThanWorkers(
+    function: _,
+    max_workers: w,
+    max_buffer: b,
+  )) =
+    par.map_ordered_with_checked(
+      source.from_list([1]),
+      with: fn(x) { x },
+      max_workers: 4,
+      max_buffer: 1,
+    )
+  w |> should.equal(4)
+  b |> should.equal(1)
+}
+
+@target(erlang)
+pub fn merge_with_checked_ok_matches_unchecked_test() {
+  let assert Ok(s) =
+    par.merge_with_checked(
+      streams: [source.from_list([1, 2]), source.from_list([3, 4])],
+      max_buffer: 4,
+    )
+  let result = s |> fold.to_list
+  list.sort(result, by: int_compare) |> should.equal([1, 2, 3, 4])
+}
+
+@target(erlang)
+pub fn merge_with_checked_rejects_zero_max_buffer_test() {
+  let assert Error(par.InvalidMaxBuffer(function: name, given: g)) =
+    par.merge_with_checked(streams: [source.from_list([1])], max_buffer: 0)
+  name |> should.equal("merge_with")
+  g |> should.equal(0)
+}
+
+@target(erlang)
+pub fn each_unordered_with_checked_ok_runs_effect_test() {
+  let collector = process.new_subject()
+  let assert Ok(Nil) =
+    par.each_unordered_with_checked(
+      over: source.from_list([1, 2, 3]),
+      with: fn(x) { process.send(collector, x) },
+      max_workers: 2,
+      max_buffer: 4,
+    )
+  let received = collect_three(collector, [])
+  list.sort(received, by: int_compare) |> should.equal([1, 2, 3])
+}
+
+@target(erlang)
+pub fn each_unordered_with_checked_rejects_zero_max_workers_test() {
+  let assert Error(par.InvalidMaxWorkers(function: name, given: g)) =
+    par.each_unordered_with_checked(
+      over: source.from_list([1]),
+      with: fn(_) { Nil },
+      max_workers: 0,
+      max_buffer: 4,
+    )
+  name |> should.equal("each_unordered_with")
+  g |> should.equal(0)
+}
+
+@target(erlang)
+pub fn each_ordered_with_checked_ok_runs_effect_in_order_test() {
+  let collector = process.new_subject()
+  let assert Ok(Nil) =
+    par.each_ordered_with_checked(
+      over: source.from_list([1, 2, 3]),
+      with: fn(x) { process.send(collector, x) },
+      max_workers: 2,
+      max_buffer: 4,
+    )
+  let received = collect_three(collector, [])
+  // each_ordered_with preserves input order, so reversal of accumulator
+  // gives [1, 2, 3].
+  list.reverse(received) |> should.equal([1, 2, 3])
+}
+
+@target(erlang)
+pub fn each_ordered_with_checked_rejects_buffer_below_workers_test() {
+  let assert Error(par.BufferLessThanWorkers(
+    function: name,
+    max_workers: w,
+    max_buffer: b,
+  )) =
+    par.each_ordered_with_checked(
+      over: source.from_list([1]),
+      with: fn(_) { Nil },
+      max_workers: 3,
+      max_buffer: 1,
+    )
+  name |> should.equal("each_ordered_with")
+  w |> should.equal(3)
+  b |> should.equal(1)
+}
+
+@target(erlang)
+fn collect_three(subj: process.Subject(Int), acc: List(Int)) -> List(Int) {
+  case list.length(acc) >= 3 {
+    True -> acc
+    False ->
+      case process.receive(from: subj, within: 1000) {
+        Ok(x) -> collect_three(subj, [x, ..acc])
+        Error(_) -> acc
+      }
+  }
+}
+
 // --- panic-in-f terminates the stream with Done (#156) -------------------
 //
 // Worker panics are detected via process monitors. When a worker

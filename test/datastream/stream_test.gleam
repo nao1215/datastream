@@ -145,13 +145,10 @@ pub fn take_checked_zero_yields_empty_test() {
 }
 
 pub fn take_checked_negative_returns_error_test() {
-  case stream.take_checked(from: from_list([1, 2, 3]), up_to: -5) {
-    Ok(_) -> should.fail()
-    Error(stream.NegativeCount(function: name, given: g)) -> {
-      name |> should.equal("take")
-      g |> should.equal(-5)
-    }
-  }
+  let assert Error(stream.NegativeCount(function: name, given: g)) =
+    stream.take_checked(from: from_list([1, 2, 3]), up_to: -5)
+  name |> should.equal("take")
+  g |> should.equal(-5)
 }
 
 pub fn drop_checked_ok_matches_drop_test() {
@@ -160,13 +157,10 @@ pub fn drop_checked_ok_matches_drop_test() {
 }
 
 pub fn drop_checked_negative_returns_error_test() {
-  case stream.drop_checked(from: from_list([1, 2, 3]), up_to: -3) {
-    Ok(_) -> should.fail()
-    Error(stream.NegativeCount(function: name, given: g)) -> {
-      name |> should.equal("drop")
-      g |> should.equal(-3)
-    }
-  }
+  let assert Error(stream.NegativeCount(function: name, given: g)) =
+    stream.drop_checked(from: from_list([1, 2, 3]), up_to: -3)
+  name |> should.equal("drop")
+  g |> should.equal(-3)
 }
 
 pub fn take_while_yields_longest_passing_prefix_test() {
@@ -471,6 +465,26 @@ pub fn buffer_negative_panics_test() {
   did_panic |> should.be_true
 }
 
+pub fn buffer_checked_ok_matches_buffer_test() {
+  let assert Ok(s) =
+    stream.buffer_checked(over: from_list([1, 2, 3, 4]), prefetch: 2)
+  s |> fold.to_list |> should.equal([1, 2, 3, 4])
+}
+
+pub fn buffer_checked_zero_returns_error_test() {
+  let assert Error(stream.NotPositive(function: name, given: g)) =
+    stream.buffer_checked(over: from_list([1, 2, 3]), prefetch: 0)
+  name |> should.equal("buffer")
+  g |> should.equal(0)
+}
+
+pub fn buffer_checked_negative_returns_error_test() {
+  let assert Error(stream.NotPositive(function: name, given: g)) =
+    stream.buffer_checked(over: from_list([1, 2, 3]), prefetch: -4)
+  name |> should.equal("buffer")
+  g |> should.equal(-4)
+}
+
 fn signal_after(n: Int) -> Stream(Bool) {
   // Yields False for the first `n` pulls, then True forever.
   datastream.unfold(from: 0, with: fn(count) {
@@ -713,6 +727,26 @@ pub fn chunks_of_terminates_on_infinite_source_test() {
   |> stream.take(up_to: 3)
   |> chunks_to_lists
   |> should.equal([[1, 1], [1, 1], [1, 1]])
+}
+
+pub fn chunks_of_checked_ok_matches_chunks_of_test() {
+  let assert Ok(s) =
+    stream.chunks_of_checked(over: from_list([1, 2, 3, 4, 5]), into: 2)
+  s |> chunks_to_lists |> should.equal([[1, 2], [3, 4], [5]])
+}
+
+pub fn chunks_of_checked_zero_returns_error_test() {
+  let assert Error(stream.NotPositive(function: name, given: g)) =
+    stream.chunks_of_checked(over: from_list([1, 2, 3]), into: 0)
+  name |> should.equal("chunks_of")
+  g |> should.equal(0)
+}
+
+pub fn chunks_of_checked_negative_returns_error_test() {
+  let assert Error(stream.NotPositive(function: name, given: g)) =
+    stream.chunks_of_checked(over: from_list([1, 2, 3]), into: -2)
+  name |> should.equal("chunks_of")
+  g |> should.equal(-2)
 }
 
 pub fn group_adjacent_groups_runs_of_equal_test() {

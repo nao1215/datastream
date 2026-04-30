@@ -74,6 +74,28 @@ Stick with `gleam/list` when the input already fits in memory and you
 don't need lazy pulls, repeatable runs, or resource cleanup. `List`
 is simpler and faster for the small-finite case.
 
+### Trusted vs. untrusted constructor inputs
+
+Several constructors enforce numeric invariants (`stream.take` /
+`stream.drop` require `n >= 0`; `stream.buffer` / `stream.chunks_of`
+and `binary.fixed_size` require `>= 1`; `binary.length_prefixed`
+requires `prefix_size ∈ {1, 2, 4, 8}`; `erlang/par.map_*_with` /
+`each_*_with` require `max_workers >= 1` and
+`max_buffer >= max_workers`; `erlang/par.merge_with` requires
+`max_buffer >= 1`).
+
+When the value is a trusted compile-time constant, use the panicking
+constructor — bad input is a programmer error and crashing loud is
+the right outcome. When the value comes from CLI flags, config
+files, request parameters, or any other dynamic source, use the
+matching `*_checked` variant: it returns
+`Result(Stream(_), <ModuleArgError>)` so argument-validation
+failures stay on the typed path instead of taking down the process.
+Each module exposes its own error type — `stream.StreamArgError`,
+`binary.BinaryArgError`, `erlang/par.ParArgError` — and every
+variant carries the constructor name so a single handler can route
+many checked constructors and still produce a meaningful diagnostic.
+
 ## Examples
 
 Each example below is a complete `src/app.gleam` you can paste in

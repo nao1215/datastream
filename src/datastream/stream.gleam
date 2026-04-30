@@ -118,19 +118,26 @@ pub fn drop(from stream: Stream(a), up_to n: Int) -> Stream(a) {
 
 /// Why a checked stream constructor refused its argument.
 ///
-/// Returned by `take_checked`, `drop_checked`, and any future
-/// non-panicking variant of a constructor that would otherwise
-/// reject its argument with a `panic`. Lets the caller surface
-/// argument-validation failures through `Result` instead of
-/// crashing the process — useful when the numeric argument comes
-/// from CLI flags, config files, or request parameters.
+/// Returned by `take_checked`, `drop_checked`, `buffer_checked`,
+/// `chunks_of_checked`, and any future non-panicking variant of a
+/// constructor that would otherwise reject its argument with a
+/// `panic`. Lets the caller surface argument-validation failures
+/// through `Result` instead of crashing the process — useful when
+/// the numeric argument comes from CLI flags, config files, or
+/// request parameters.
 ///
 /// `function` names the constructor that rejected the value
-/// (`"take"`, `"drop"`, ...) so a caller routing many checked
-/// constructors through the same handler can produce a meaningful
-/// error message.
+/// (`"take"`, `"drop"`, `"buffer"`, `"chunks_of"`) so a caller
+/// routing many checked constructors through the same handler can
+/// produce a meaningful error message.
+///
+/// - `NegativeCount` covers constructors whose contract is `>= 0`
+///   (`take`, `drop`).
+/// - `NotPositive` covers constructors whose contract is `>= 1`
+///   (`buffer`, `chunks_of`).
 pub type StreamArgError {
   NegativeCount(function: String, given: Int)
+  NotPositive(function: String, given: Int)
 }
 
 /// Like `take`, but returns the argument-validation failure as a
@@ -612,6 +619,27 @@ pub fn buffer(over stream: Stream(a), prefetch capacity: Int) -> Stream(a) {
   }
 }
 
+/// Like `buffer`, but returns the argument-validation failure as a
+/// `Result` instead of panicking. Use this when `capacity` comes
+/// from dynamic input (CLI, config, request parameters); the
+/// panicking `buffer` remains the right tool for trusted constants.
+///
+/// On success the stream behaves identically to
+/// `buffer(over: stream, prefetch: capacity)`.
+///
+/// The caller is responsible for closing `stream` if the
+/// constructor returns `Error` — no upstream pull happens, but the
+/// upstream is otherwise untouched.
+pub fn buffer_checked(
+  over stream: Stream(a),
+  prefetch capacity: Int,
+) -> Result(Stream(a), StreamArgError) {
+  case capacity < 1 {
+    True -> Error(NotPositive(function: "buffer", given: capacity))
+    False -> Ok(buffer_active(stream, [], 0, capacity))
+  }
+}
+
 fn buffer_active(
   stream: Stream(a),
   buf: List(a),
@@ -1001,6 +1029,26 @@ pub fn chunks_of(over stream: Stream(a), into size: Int) -> Stream(Chunk(a)) {
   case size < 1 {
     True -> panic as "datastream/stream.chunks_of: size must be >= 1"
     False -> chunks_active(stream, [], 0, size)
+  }
+}
+
+/// Like `chunks_of`, but returns the argument-validation failure as
+/// a `Result` instead of panicking. Use this when `size` comes from
+/// dynamic input (CLI, config, request parameters); the panicking
+/// `chunks_of` remains the right tool for trusted constants.
+///
+/// On success the stream behaves identically to
+/// `chunks_of(over: stream, into: size)`.
+///
+/// The caller is responsible for closing `stream` if the
+/// constructor returns `Error`.
+pub fn chunks_of_checked(
+  over stream: Stream(a),
+  into size: Int,
+) -> Result(Stream(Chunk(a)), StreamArgError) {
+  case size < 1 {
+    True -> Error(NotPositive(function: "chunks_of", given: size))
+    False -> Ok(chunks_active(stream, [], 0, size))
   }
 }
 
