@@ -74,6 +74,23 @@ Stick with `gleam/list` when the input already fits in memory and you
 don't need lazy pulls, repeatable runs, or resource cleanup. `List`
 is simpler and faster for the small-finite case.
 
+### End-to-end pipeline examples
+
+Compile-checked, runnable end-to-end pipelines live under
+[`test/examples/`](test/examples/) and run on every CI build via
+`gleam test`. Each module is self-contained — copy it into a new
+project, replace the in-memory `source.from_list` fixture with a
+real `source.resource` over a file or socket, and the rest of the
+pipeline stays the same.
+
+| Example | Shape |
+|---------|-------|
+| [`log_pipeline_example`](test/examples/log_pipeline_example.gleam) | bytes → `text.lines` → per-line validation → per-level counts |
+| [`length_prefixed_pipeline_example`](test/examples/length_prefixed_pipeline_example.gleam) | chunked bytes → `binary.length_prefixed_with` → `fold.collect_result` |
+| [`ndjson_pipeline_example`](test/examples/ndjson_pipeline_example.gleam) | bytes → `text.utf8_decode` → `text.lines` → per-record parse |
+| [`parallel_pipeline_example`](test/examples/parallel_pipeline_example.gleam) | BEAM-only `par.map_unordered_with` → `fold.sum_int` |
+| [`dataprep_pipeline_example`](test/examples/dataprep_pipeline_example.gleam) | per-row validation that accumulates every error via `dataprep/validated` |
+
 ### Trusted vs. untrusted constructor inputs
 
 Several constructors enforce numeric invariants (`stream.take` /

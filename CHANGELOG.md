@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **examples**: `test/examples/` ships five compile-checked
+  end-to-end pipelines exercised on every CI build via `gleam test`:
+  log-line ingestion (`log_pipeline_example`), HTTP-style
+  length-prefixed framing (`length_prefixed_pipeline_example`),
+  NDJSON-shaped per-line decoding (`ndjson_pipeline_example`),
+  BEAM-only parallel batch processing (`parallel_pipeline_example`),
+  and accumulating-validation request processing via `dataprep`
+  (`dataprep_pipeline_example`). The README's "When to use" section
+  links them all so adopters can map a real workflow to a
+  first-party reference. `dataprep` is now a dev-dependency for the
+  validation example. (#187)
 - **stream**: `stream.buffer_checked` and `stream.chunks_of_checked`
   return `Result(Stream(_), StreamArgError)` instead of panicking
   on a non-positive argument. Use these when `capacity` / `size`
