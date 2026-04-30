@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-04-30
+
 ### Added
 
 - **stream**: `stream.take_checked` and `stream.drop_checked` return
