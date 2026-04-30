@@ -89,12 +89,15 @@ constructor — bad input is a programmer error and crashing loud is
 the right outcome. When the value comes from CLI flags, config
 files, request parameters, or any other dynamic source, use the
 matching `*_checked` variant: it returns
-`Result(Stream(_), <ModuleArgError>)` so argument-validation
-failures stay on the typed path instead of taking down the process.
-Each module exposes its own error type — `stream.StreamArgError`,
-`binary.BinaryArgError`, `erlang/par.ParArgError` — and every
-variant carries the constructor name so a single handler can route
-many checked constructors and still produce a meaningful diagnostic.
+`Result(payload, <ModuleArgError>)` so argument-validation failures
+stay on the typed path instead of taking down the process. The
+payload matches the unchecked function's return type — `Stream(_)`
+for the framing constructors, `Nil` for the effect-only
+`par.each_*_with_checked` variants. Each module exposes its own
+error type — `stream.StreamArgError`, `binary.BinaryArgError`,
+`erlang/par.ParArgError` — and every variant carries the
+constructor name so a single handler can route many checked
+constructors and still produce a meaningful diagnostic.
 
 ## Examples
 
