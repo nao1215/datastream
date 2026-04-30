@@ -1,5 +1,5 @@
 name = "datastream"
-version = "0.7.0"
+version = "0.8.0"
 description = "Compositional, resource-safe streams for Gleam — runs on Erlang and JavaScript targets"
 licences = ["MIT"]
 repository = { type = "github", user = "nao1215", repo = "datastream" }
