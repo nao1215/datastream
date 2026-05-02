@@ -14,8 +14,9 @@ links = [
 # Erlang and JavaScript targets. The cross-target core (`datastream`,
 # `datastream/source`, `datastream/stream`, `datastream/fold`,
 # `datastream/sink`, `datastream/chunk`, `datastream/text`,
-# `datastream/binary`) MUST run on both. The `datastream/erlang/*`
-# extension modules are guarded so they only compile on Erlang.
+# `datastream/binary`) MUST run on both. Target-specific extension
+# modules (`datastream/erlang/*`, `datastream/javascript/*`) are
+# guarded so each target only sees the surface meant for it.
 gleam = ">= 1.15.0"
 
 [dependencies]

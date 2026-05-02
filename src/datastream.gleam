@@ -2,8 +2,8 @@
 //// Gleam. The cross-target core (`datastream/source`, `datastream/stream`,
 //// `datastream/fold`, `datastream/sink`, `datastream/chunk`,
 //// `datastream/text`, `datastream/binary`) runs on both the Erlang
-//// and JavaScript targets. The `datastream/erlang/*` extension
-//// modules are quarantined to the Erlang target.
+//// and JavaScript targets. Target-specific extensions live under
+//// `datastream/erlang/*` and `datastream/javascript/*`.
 ////
 //// This module defines the foundational types every later module builds
 //// on: the opaque pipeline value `Stream(a)` and the pull-result enum
