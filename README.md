@@ -1,14 +1,11 @@
 # datastream
 
-[![Hex](https://img.shields.io/hexpm/v/datastream)](https://hex.pm/packages/datastream)
-[![Hex Downloads](https://img.shields.io/hexpm/dt/datastream)](https://hex.pm/packages/datastream)
-[![CI](https://github.com/nao1215/datastream/actions/workflows/ci.yml/badge.svg)](https://github.com/nao1215/datastream/actions/workflows/ci.yml)
+datastream is a pull-based stream library for Gleam.
 
-`datastream` is a pull-based stream library for Gleam.
-
-It is meant for pipelines that should stay lazy, repeatable, and explicit
-about effects. A `Stream(a)` is a pipeline definition, not a materialized
-collection, so each terminal operation runs the source again.
+A `Stream(a)` is a pipeline definition, not a materialized collection.
+Each terminal operation runs the source again from the beginning, so the
+library fits work that should stay lazy, repeatable, and explicit about
+effects.
 
 ## Install
 
@@ -18,110 +15,19 @@ gleam add datastream
 
 API reference: <https://hexdocs.pm/datastream>
 
-## Compatibility with web frameworks
+## When to use it
 
-`datastream` depends on `gleam_erlang >= 1.3.0` and
-`gleam_stdlib >= 0.44.0`. Some older versions of popular web-framework
-packages pin `gleam_erlang < 1.0.0`, which creates an unresolvable
-dependency conflict. Use the versions listed below (or newer) when
-combining `datastream` with a web stack:
+Use `datastream` when you need one or more of these:
 
-| Package | Minimum compatible version |
-|---------|--------------------------|
-| wisp | `>= 2.0.0` |
-| mist | `>= 6.0.0` |
-| gleam_httpc | `>= 5.0.0` |
+- the input is large or unbounded and should not be loaded all at once
+- the pipeline owns a real resource such as a file handle, socket, or cursor
+- the work is naturally chunked text or bytes
+- the Erlang target needs bounded parallel work or time-based stream operators
 
-Older releases of these packages (wisp 1.x, mist 4.x, gleam_httpc 3.x)
-require `gleam_erlang < 1.0.0` and cannot coexist with `datastream` in
-the same project.
+Stay with `gleam/list` when the whole input is already in memory and you
+do not need lazy pulls, replayable pipelines, or deterministic cleanup.
 
-## Target support
-
-- Erlang target: every module in this package
-- JavaScript target: the cross-target core only
-- `datastream/erlang/*` modules are BEAM-only
-- On JavaScript, `datastream` does not provide async streaming I/O
-  adapters. Resolve async I/O outside the library, then feed the data into
-  the core with constructors such as `source.from_list`,
-  `source.from_bit_array`, or `source.once`
-
-## Use cases
-
-- Build pipelines from lists, ranges, options, results, or custom state
-- Transform infinite or finite streams with `map`, `filter`, `take`, and
-  `flat_map`
-- Process chunked text or bytes without joining the whole input first
-- Wrap your own synchronous resources with `source.resource` and
-  `source.try_resource`
-- On Erlang, work with subjects, timers, and bounded parallelism through
-  `datastream/erlang/*`
-
-## When to use
-
-Reach for `datastream` when:
-
-- The input is large or unbounded and shouldn't fit in memory all at
-  once.
-- A pipeline wraps a real resource (file handle, socket, cursor) that
-  must be released on every termination path.
-- You need built-in back-pressure for parallel `map` / `each` on
-  Erlang (`datastream/erlang/par`).
-- You need chunk-boundary-aware framing for byte or text protocols
-  (`datastream/text`, `datastream/binary`).
-
-Stick with `gleam/list` when the input already fits in memory and you
-don't need lazy pulls, repeatable runs, or resource cleanup. `List`
-is simpler and faster for the small-finite case.
-
-### End-to-end pipeline examples
-
-Compile-checked, runnable end-to-end pipelines live under
-[`test/examples/`](test/examples/) and run on every CI build via
-`gleam test`. Each module is self-contained — copy it into a new
-project, replace the in-memory `source.from_list` fixture with a
-real `source.resource` over a file or socket, and the rest of the
-pipeline stays the same.
-
-| Example | Shape |
-|---------|-------|
-| [`log_pipeline_example`](test/examples/log_pipeline_example.gleam) | bytes → `text.lines` → per-line validation → per-level counts |
-| [`length_prefixed_pipeline_example`](test/examples/length_prefixed_pipeline_example.gleam) | chunked bytes → `binary.length_prefixed_with` → `fold.collect_result` |
-| [`ndjson_pipeline_example`](test/examples/ndjson_pipeline_example.gleam) | bytes → `text.utf8_decode` → `text.lines` → per-record parse |
-| [`parallel_pipeline_example`](test/examples/parallel_pipeline_example.gleam) | BEAM-only `par.map_unordered_with` → `fold.sum_int` |
-| [`dataprep_pipeline_example`](test/examples/dataprep_pipeline_example.gleam) | per-row validation that accumulates every error via `dataprep/validated` |
-
-### Trusted vs. untrusted constructor inputs
-
-Several constructors enforce numeric invariants (`stream.take` /
-`stream.drop` require `n >= 0`; `stream.buffer` / `stream.chunks_of`
-and `binary.fixed_size` require `>= 1`; `binary.length_prefixed`
-requires `prefix_size ∈ {1, 2, 4, 8}`; `erlang/par.map_*_with` /
-`each_*_with` require `max_workers >= 1` and
-`max_buffer >= max_workers`; `erlang/par.merge_with` requires
-`max_buffer >= 1`).
-
-When the value is a trusted compile-time constant, use the panicking
-constructor — bad input is a programmer error and crashing loud is
-the right outcome. When the value comes from CLI flags, config
-files, request parameters, or any other dynamic source, use the
-matching `*_checked` variant: it returns
-`Result(payload, <ModuleArgError>)` so argument-validation failures
-stay on the typed path instead of taking down the process. The
-payload matches the unchecked function's return type — `Stream(_)`
-for the framing constructors, `Nil` for the effect-only
-`par.each_*_with_checked` variants. Each module exposes its own
-error type — `stream.StreamArgError`, `binary.BinaryArgError`,
-`erlang/par.ParArgError` — and every variant carries the
-constructor name so a single handler can route many checked
-constructors and still produce a meaningful diagnostic.
-
-## Examples
-
-Each example below is a complete `src/app.gleam` you can paste in
-after `gleam new app && gleam add datastream`, then run with `gleam run`.
-
-### Basic pipeline
+## Quick start
 
 ```gleam
 import datastream/fold
@@ -135,116 +41,17 @@ pub fn main() {
     |> stream.map(with: fn(x) { x * 2 })
     |> stream.take(up_to: 5)
     |> fold.to_list
+
   io.debug(result)
   // [2, 4, 6, 8, 10]
 }
 ```
 
-### Line-oriented text
+## Resource-backed streams
 
-```gleam
-import datastream/fold
-import datastream/source
-import datastream/text
-import gleam/io
-
-pub fn main() {
-  let lines =
-    source.from_list(["hel", "lo\nwor", "ld\n"])
-    |> text.lines
-    |> fold.to_list
-  io.debug(lines)
-  // ["hello", "world"]
-}
-```
-
-### Binary framing
-
-```gleam
-import datastream/binary
-import datastream/fold
-import datastream/source
-import gleam/io
-
-pub fn main() {
-  let frames =
-    source.from_list([<<2, 65>>, <<66, 1, 67>>])
-    |> binary.length_prefixed(prefix_size: 1)
-    |> fold.to_list
-  io.debug(frames)
-  // [Ok(<<65, 66>>), Ok(<<67>>)]
-  // A truncated trailing frame surfaces as one
-  // Error(IncompleteFrame(expected:, got:)) before the stream halts,
-  // so callers can react instead of silently losing data.
-}
-```
-
-### Result-shaped streams
-
-```gleam
-import datastream/fold
-import datastream/source
-import gleam/io
-
-pub fn main() {
-  let result =
-    source.from_list([Ok(1), Ok(2), Error("bad input")])
-    |> fold.collect_result
-  io.debug(result)
-  // Error("bad input") : Result(List(Int), String)
-}
-```
-
-### Use with dataprep
-
-`datastream` does not depend on `dataprep`. Adding it (`gleam add
-dataprep`) and combining `fold.fold` with a small applicative
-`combine` step accumulates every per-element error in a single pass —
-the right tool when reporting all failures matters more than stopping
-on the first one.
-
-```gleam
-import dataprep/non_empty_list
-import dataprep/validated.{type Validated, Invalid, Valid}
-import datastream/fold
-import datastream/source
-import gleam/io
-
-pub fn main() {
-  source.from_list([
-    Valid(1),
-    Invalid(non_empty_list.single("row 2 bad")),
-    Valid(3),
-    Invalid(non_empty_list.single("row 4 bad")),
-  ])
-  |> fold.fold(from: Valid([]), with: combine)
-  |> io.debug
-  // Invalid(NonEmptyList("row 2 bad", ["row 4 bad"]))
-}
-
-fn combine(
-  acc: Validated(List(Int), String),
-  next: Validated(Int, String),
-) -> Validated(List(Int), String) {
-  case acc, next {
-    Valid(xs), Valid(x) -> Valid([x, ..xs])
-    Valid(_), Invalid(es) -> Invalid(es)
-    Invalid(es), Valid(_) -> Invalid(es)
-    Invalid(a), Invalid(b) -> Invalid(non_empty_list.append(a, b))
-  }
-}
-```
-
-For the simpler short-circuit case use `fold.collect_result` /
-`fold.partition_result` on `Stream(Result(a, e))` instead — `Validated`
-is for accumulating every error, not stopping on the first.
-
-### Resource-backed stream
-
-`source.resource` opens once on the first pull, calls `next` for each
-element, and runs `close` exactly once on every termination path
-(normal end, downstream early-exit via `take`, fold short-circuit,
-`sink.try_each` failure).
+`source.resource` opens lazily on the first pull, yields values one by
+one, and closes exactly once on normal completion and on the early-stop
+paths the library controls.
 
 ```gleam
 import datastream.{Done, Next}
@@ -254,214 +61,131 @@ import datastream/stream
 import gleam/io
 
 pub fn main() {
-  // A toy resource: a counter that yields 1, 2, 3 then halts.
-  // `open` returns the initial state; `next` advances it; `close`
-  // would release a real handle (file, socket, cursor).
-  let stream =
+  let numbers =
     source.resource(
-      open: fn() {
-        io.println("open")
-        1
-      },
-      next: fn(n) {
-        case n > 3 {
-          True -> Done
-          False -> Next(element: n, state: n + 1)
-        }
-      },
-      close: fn(_state) { io.println("close") },
-    )
-
-  // Take only the first element. `close` still runs because of the
-  // early-exit contract.
-  stream
-  |> stream.take(up_to: 1)
-  |> fold.to_list
-  |> io.debug
-  // open
-  // close
-  // [1]
-}
-```
-
-### Resource with fallible open
-
-`source.try_resource` is the variant whose `open` and per-element `next`
-can fail. A failed open emits exactly one `Error(source.OpenError(e))`
-element and halts without calling `close`; per-element failures surface
-as `Error(source.NextError(e))` and do not halt the stream.
-
-```gleam
-import datastream.{Done, Next}
-import datastream/fold
-import datastream/source
-import gleam/io
-
-pub fn main() {
-  let stream =
-    source.try_resource(
-      open: fn() -> Result(Int, String) { Error("not available") },
-      next: fn(n) {
-        case n > 3 {
-          True -> Done
-          False -> Next(element: Ok(n), state: n + 1)
+      open: fn() { 1 },
+      next: fn(state) {
+        case state <= 3 {
+          True -> Next(element: state, state: state + 1)
+          False -> Done
         }
       },
       close: fn(_state) { Nil },
     )
 
-  stream
-  |> fold.to_list
-  |> io.debug
-  // [Error(OpenError("not available"))]
-}
-```
-
-### Line-by-line processing over a resource
-
-The common real-world pipeline — open a file or cursor, stream lines,
-filter, release the handle — composes `source.resource` with
-`text.lines` and an early-exit terminal. The close contract releases
-the handle on every termination path, so the example below releases
-the pre-built "handle" regardless of how the downstream ends.
-
-In production, `open` would return a real file handle, `next` would
-call something like `file.read_line(handle)` (on Erlang) and wrap the
-result in `Next(line, handle)` or `Done`, and `close` would release
-the handle. The toy version below uses a list of chunks in place of
-a real handle so the example runs on both targets.
-
-```gleam
-import datastream.{Done, Next}
-import datastream/fold
-import datastream/source
-import datastream/stream
-import datastream/text
-import gleam/io
-
-pub fn main() {
-  source.resource(
-    open: fn() { ["INFO hello\nWARN slow\n", "INFO bye\n"] },
-    next: fn(state) {
-      case state {
-        [] -> Done
-        [head, ..tail] -> Next(element: head, state: tail)
-      }
-    },
-    close: fn(_state) { Nil },
-  )
-  |> text.lines
+  numbers
   |> stream.take(up_to: 2)
   |> fold.to_list
   |> io.debug
-  // ["INFO hello", "WARN slow"]
+  // [1, 2]
 }
 ```
 
-### Bounded parallel map (BEAM)
+Use `source.try_resource` when opening or reading can fail and you want
+the failure on the typed path as `Result`.
+
+## JavaScript async I/O
+
+The core `Stream(a)` stays synchronous on both targets. That is a
+deliberate design choice: each pull either returns the next element
+immediately or reports `Done`.
+
+Because of that, the official JavaScript boundary is:
+
+- async input stays in host JavaScript until it has been reduced to a bounded value or batch, then enters `datastream` through `source.once`, `source.from_list`, `source.from_bit_array`, or a resource constructor
+- synchronous `Stream(a)` pipelines leave `datastream` through `datastream/javascript/async.to_async_iterable`
+
+This means `datastream` does not pretend that a host-side
+`AsyncIterable` is the same thing as a pure `Stream(a)`. The adapter is
+honest about where `await` lives.
+
+Gleam:
 
 ```gleam
-import datastream/erlang/par
-import datastream/fold
+import datastream/javascript/async as js_async
 import datastream/source
 import datastream/stream
-import gleam/io
+import gleam/string
 
-pub fn main() {
-  source.iterate(from: 1, with: fn(x) { x + 1 })
-  |> par.map_unordered(with: fn(x) { x * x })
-  |> stream.take(up_to: 5)
-  |> fold.to_list
-  |> io.debug
-  // [1, 4, 9, 16, 25]   (or any permutation; map_unordered emits as workers finish)
+pub fn lines_for_host() -> js_async.AsyncIterable(String) {
+  source.from_list(["a", "b", "c"])
+  |> stream.map(with: string.uppercase)
+  |> js_async.to_async_iterable
 }
 ```
 
-For deterministic order use `par.map_ordered` (input order preserved
-at the cost of a small reorder buffer). Tune concurrency with
-`par.map_unordered_with(over:, with:, max_workers:, max_buffer:)`.
+Host JavaScript:
 
-### Time-bucketed stream (BEAM)
+```js
+import { lines_for_host } from "./build/dev/javascript/app/app.mjs";
 
-```gleam
-import datastream/chunk
-import datastream/erlang/source as beam_source
-import datastream/erlang/time
-import datastream/fold
-import datastream/stream
-import gleam/io
-import gleam/list
-
-pub fn main() {
-  // Tick every 20 ms; bucket arrivals into 60 ms windows; take the
-  // first window's chunk.
-  beam_source.ticks(every: 20)
-  |> time.window_time(span: 60)
-  |> stream.take(up_to: 1)
-  |> fold.to_list
-  |> list.flat_map(chunk.to_list)
-  |> list.length
-  |> io.debug
-  // 3   (approximately — three ticks land in one 60 ms window)
+for await (const line of lines_for_host()) {
+  console.log(line);
+  if (line === "B") break;
 }
 ```
+
+Breaking out of the `for await` loop closes the underlying stream once,
+so resource-backed pipelines still release handles promptly.
+
+## Example pipelines
+
+Compile-checked examples live under `test/examples/` and run in CI.
+
+| Example | Shape |
+| --- | --- |
+| `test/examples/log_pipeline_example.gleam` | bytes -> `text.lines` -> validation -> per-level counts |
+| `test/examples/length_prefixed_pipeline_example.gleam` | chunked bytes -> `binary.length_prefixed_with` -> collection |
+| `test/examples/ndjson_pipeline_example.gleam` | bytes -> UTF-8 decode -> lines -> per-record parse |
+| `test/examples/parallel_pipeline_example.gleam` | BEAM-only bounded parallel map |
+| `test/examples/dataprep_pipeline_example.gleam` | per-row validation with accumulated errors |
 
 ## Module guide
 
 - `datastream`: defines `Stream(a)` and `Step(a, state)`
-- `datastream/source`: constructors for streams and resources
-- `datastream/stream`: lazy combinators and composition
-- `datastream/fold`: pure terminal operations
-- `datastream/sink`: effectful terminal operations
-- `datastream/chunk`: opaque finite chunks
-- `datastream/text`: chunk-aware text helpers
-- `datastream/binary`: chunk-aware byte and framing helpers
-- `datastream/erlang/source`: BEAM-only subject / timer sources and per-element `timeout`
+- `datastream/source`: constructors for list-backed, generated, and resource-backed streams
+- `datastream/stream`: lazy combinators such as `map`, `filter`, `flat_map`, `zip`, `take`, and `chunks_of`
+- `datastream/fold`: pure terminals such as `to_list`, `sum`, `first`, `find`, and `collect_result`
+- `datastream/sink`: effectful terminals such as `each` and `try_each`
+- `datastream/chunk`: opaque finite batches
+- `datastream/text`: chunk-aware UTF-8 decode and line splitting
+- `datastream/binary`: byte and framing helpers
+- `datastream/erlang/source`: BEAM-only subject, timer, and timeout helpers
 - `datastream/erlang/sink`: BEAM-only subject sink
 - `datastream/erlang/par`: BEAM-only bounded parallel combinators and `race`
 - `datastream/erlang/time`: BEAM-only time-based combinators
+- `datastream/javascript/async`: JavaScript-only async iterable adapter for leaving the synchronous core
 
-## Semantics
+## Target support
 
-- Streams are lazy: user callbacks run only when a fold or sink pulls the
-  stream
-- Streams are repeatable: running two terminals on the same stream reruns
-  the source
-- In the cross-target core, resource-backed sources are closed on normal
-  completion and on early exit
-- Errors are carried in the element type, for example
-  `Stream(Result(a, e))`
+- Erlang target: the full package
+- JavaScript target: the cross-target core and `datastream/javascript/async`
+- `datastream/erlang/*` modules are BEAM-only
 
-### Close contract
+## Checked constructors
 
-`source.resource` calls `close(state)` automatically when `next` returns
-`Done`. Combinators such as `flat_map` and `append` rely on this
-**self-close-on-Done** convention: they do NOT call `close` on an upstream
-that has already returned `Done`, because the source has already released
-its resources at that point.
+Some constructors reject invalid numeric arguments at construction time.
+Use the panicking variants when the value is a trusted constant in your
+own code. Use the matching `*_checked` variant when the value comes from
+CLI flags, config files, request parameters, or any other dynamic input.
 
-This means:
+The main checked families are:
 
-- **`source.resource`** — safe. Resources are released on every
-  termination path (normal end, early exit, `take`, `sink.try_each`
-  error).
-- **`source.from_list`**, **`source.iterate`**, etc. — no resources to
-  close, so the convention is a no-op.
-- **Custom streams built with the internal `make` function** — `close` is
-  only called on early exit, NOT on natural exhaustion. If your custom
-  stream holds a resource, release it inside `next` when you return `Done`
-  (the same pattern `source.resource` uses internally).
+- `stream.take_checked`, `stream.drop_checked`
+- `stream.buffer_checked`, `stream.chunks_of_checked`
+- `binary.length_prefixed_checked`, `binary.length_prefixed_with_checked`, `binary.fixed_size_checked`
+- `datastream/erlang/par.*_checked`
 
-Combinators that hold multiple upstreams (`flat_map`, `zip`, `append`)
-close their upstreams in a documented order on early exit. On normal
-completion the self-close convention applies to each upstream
-independently.
+## Web framework compatibility
 
-## License
+`datastream` depends on `gleam_erlang >= 1.3.0` and
+`gleam_stdlib >= 0.44.0`. Older releases of some web packages pin
+`gleam_erlang < 1.0.0`, which conflicts with `datastream`.
 
-MIT — see [LICENSE](LICENSE).
+Use these versions or newer when combining `datastream` with a web stack:
 
-## Contributing
-
-See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup and pull
-request expectations. Bug reports and proposals via GitHub Issues.
+| Package | Minimum compatible version |
+| --- | --- |
+| `wisp` | `>= 2.0.0` |
+| `mist` | `>= 6.0.0` |
+| `gleam_httpc` | `>= 5.0.0` |

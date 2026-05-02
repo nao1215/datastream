@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- `datastream/javascript/async` is a new JavaScript-only async edge
+  adapter module. `to_async_iterable` exposes any synchronous
+  `Stream(a)` as a host-consumable `AsyncIterable(a)` while preserving
+  `close` semantics on normal completion and early stop. The README now
+  documents this as the official async boundary: async input stays in
+  host JavaScript until it has been reduced to a bounded value or batch,
+  then enters the core through the existing `source.*` constructors.
+  (#186)
+
 ## [0.9.0] - 2026-04-30
 
 ### Added
