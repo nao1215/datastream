@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-05-04
+
 ### Added
 
 - `datastream/javascript/async` is a new JavaScript-only async edge
@@ -17,6 +19,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   host JavaScript until it has been reduced to a bounded value or batch,
   then enters the core through the existing `source.*` constructors.
   (#186)
+
+### Documentation
+
+- **readme**: Two of the strongest end-to-end pipelines —
+  `log_pipeline_example` and `ndjson_pipeline_example` — are now inlined
+  in the README so first-time readers see a runnable shape before the
+  module guide. The "When to use it" section links straight at those
+  inlined examples, and the example pipelines catalog table at the
+  bottom now points at GitHub blob URLs for one-click access to full
+  source. (#197)
 
 ## [0.9.0] - 2026-04-30
 
