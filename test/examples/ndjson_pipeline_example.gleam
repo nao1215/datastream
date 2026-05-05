@@ -21,7 +21,6 @@ import datastream/source
 import datastream/stream
 import datastream/text
 import gleam/int
-import gleam/option.{type Option, None, Some}
 import gleam/string
 import gleeunit/should
 
@@ -54,24 +53,17 @@ pub fn run() -> Result(List(Record), ParseError) {
     ])
 
   chunks
-  // BitArray → Stream(Result(String, Nil)) per UTF-8 boundary.
-  |> text.utf8_decode
-  // Drop UTF-8 errors here for the example; production code would
-  // route them via `fold.partition_result` instead.
-  |> stream.filter_map(with: ok_to_option)
+  // BitArray → Stream(String), dropping any UTF-8 decode errors.
+  // Production code that needs to surface those errors should use
+  // `text.utf8_decode` and route the resulting `Stream(Result(...))`
+  // via `fold.partition_result` instead.
+  |> text.utf8_decode_lossy
   // Reassemble lines (handles the chunk-spanning record).
   |> text.lines
   // String → Result(Record, ParseError).
   |> stream.map(with: parse_record)
   // Stop at the first parse failure.
   |> fold.collect_result
-}
-
-fn ok_to_option(r: Result(String, Nil)) -> Option(String) {
-  case r {
-    Ok(s) -> Some(s)
-    Error(Nil) -> None
-  }
 }
 
 fn parse_record(line: String) -> Result(Record, ParseError) {

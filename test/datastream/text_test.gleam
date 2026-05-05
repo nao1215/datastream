@@ -362,6 +362,61 @@ pub fn utf8_decode_rejects_consecutive_lone_continuation_bytes_test() {
   |> should.equal([Error(Nil), Error(Nil)])
 }
 
+// --- utf8_decode_lossy ----------------------------------------------------
+
+pub fn utf8_decode_lossy_simple_ascii_test() {
+  from_list([<<104, 105>>])
+  |> text.utf8_decode_lossy
+  |> fold.to_list
+  |> should.equal(["hi"])
+}
+
+pub fn utf8_decode_lossy_drops_invalid_lead_byte_test() {
+  // 0xFF is not a valid lead byte. The lossy variant drops the error
+  // entirely rather than emitting Error(Nil), so the surrounding ASCII
+  // bytes pass through as plain strings.
+  from_list([<<104, 255, 105>>])
+  |> text.utf8_decode_lossy
+  |> fold.to_list
+  |> should.equal(["h", "i"])
+}
+
+pub fn utf8_decode_lossy_drops_incomplete_trailing_sequence_test() {
+  // A 4-byte lead with only 2 bytes available at EOF is invalid; the
+  // lossy variant drops it without yielding any element.
+  from_list([<<240, 159>>])
+  |> text.utf8_decode_lossy
+  |> fold.to_list
+  |> should.equal([])
+}
+
+pub fn utf8_decode_lossy_reassembles_split_codepoint_test() {
+  // The boundary-spanning multi-byte codepoint still reassembles —
+  // the lossy variant only drops actual decode errors, it does not
+  // change the chunk-boundary handling of the underlying decoder.
+  from_list([<<240, 159>>, <<145, 141>>])
+  |> text.utf8_decode_lossy
+  |> fold.to_list
+  |> should.equal(["👍"])
+}
+
+pub fn utf8_decode_lossy_empty_source_test() {
+  from_list([])
+  |> text.utf8_decode_lossy
+  |> fold.to_list
+  |> should.equal([])
+}
+
+pub fn utf8_decode_lossy_composes_with_lines_test() {
+  // The motivating use case from issue #200: BitArray chunks → UTF-8
+  // → line framing without a hand-rolled Result-to-Option shim.
+  from_list([<<"1 first\n2 sec">>, <<"ond\n3 third\n">>])
+  |> text.utf8_decode_lossy
+  |> text.lines
+  |> fold.to_list
+  |> should.equal(["1 first", "2 second", "3 third"])
+}
+
 // --- utf8_encode ----------------------------------------------------------
 
 pub fn utf8_encode_ascii_test() {

@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **text**: `datastream/text.utf8_decode_lossy` is a convenience wrapper
+  over `utf8_decode` that drops chunks which fail to decode and yields
+  a plain `Stream(String)`. The chunked-bytes → lines → records pipeline
+  (the most common shape) now composes directly without a hand-rolled
+  `Result(String, Nil) -> Option(String)` shim:
+  `chunks |> text.utf8_decode_lossy |> text.lines |> ...`. The strict
+  `utf8_decode` remains the right tool when callers need to observe
+  decode errors via `fold.partition_result`. README and the
+  `ndjson_pipeline_example` are updated to lead with the lossy variant.
+  (#200)
+
 ## [0.10.0] - 2026-05-04
 
 ### Added

@@ -130,7 +130,6 @@ import datastream/stream
 import datastream/text
 import gleam/int
 import gleam/io
-import gleam/option.{type Option, None, Some}
 import gleam/string
 
 pub type Record {
@@ -152,20 +151,12 @@ pub fn main() {
     ])
 
   chunks
-  |> text.utf8_decode
-  |> stream.filter_map(with: ok_to_option)
+  |> text.utf8_decode_lossy
   |> text.lines
   |> stream.map(with: parse_record)
   |> fold.collect_result
   |> io.debug
   // Ok([Record(1, "first record"), Record(2, "second record"), ...])
-}
-
-fn ok_to_option(r: Result(String, Nil)) -> Option(String) {
-  case r {
-    Ok(s) -> Some(s)
-    Error(Nil) -> None
-  }
 }
 
 fn parse_record(line: String) -> Result(Record, ParseError) {
