@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-05-05
+
 ### Added
 
 - **text**: `datastream/text.utf8_decode_lossy` is a convenience wrapper
