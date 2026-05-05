@@ -495,6 +495,41 @@ fn consume_continuation(
   }
 }
 
+/// Decode a stream of UTF-8 byte chunks into a stream of decoded
+/// strings, silently dropping any chunk that fails to decode.
+///
+/// Convenience wrapper for the common "I just want strings" pipeline:
+/// `chunks |> text.utf8_decode_lossy |> text.lines |> ...` typechecks
+/// without a hand-rolled `Result(String, Nil) -> Option(String)` shim.
+///
+/// Use this when invalid UTF-8 should be tolerated as data corruption
+/// the caller does not need to observe (most file/socket reads of
+/// known-good text). Use `utf8_decode` directly when the caller needs
+/// to surface decode errors — for example via
+/// `fold.partition_result` to log them while still streaming the
+/// successful records through.
+pub fn utf8_decode_lossy(over stream: Stream(BitArray)) -> Stream(String) {
+  utf8_decode_lossy_active(utf8_decode(over: stream))
+}
+
+fn utf8_decode_lossy_active(
+  source: Stream(Result(String, Nil)),
+) -> Stream(String) {
+  datastream.make(pull: fn() { utf8_decode_lossy_pull(source) }, close: fn() {
+    datastream.close(source)
+  })
+}
+
+fn utf8_decode_lossy_pull(
+  source: Stream(Result(String, Nil)),
+) -> Step(String, Stream(String)) {
+  case datastream.pull(source) {
+    Done -> Done
+    Next(Ok(s), rest) -> Next(s, utf8_decode_lossy_active(rest))
+    Next(Error(Nil), rest) -> utf8_decode_lossy_pull(rest)
+  }
+}
+
 /// Encode a stream of strings as UTF-8 byte chunks.
 ///
 /// Each input string maps to its UTF-8 encoding as a single
