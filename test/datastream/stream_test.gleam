@@ -618,6 +618,78 @@ pub fn broadcast_negative_panics_test() {
   did_panic |> should.be_true
 }
 
+// --- broadcast_bounded ----------------------------------------------------
+
+pub fn broadcast_bounded_within_limit_works_like_broadcast_test() {
+  // While both consumers stay within `max_queue` elements of each
+  // other, behaviour is identical to `broadcast`.
+  let assert [a, b] =
+    stream.broadcast_bounded(over: from_list([1, 2, 3]), into: 2, max_queue: 5)
+  fold.to_list(a) |> should.equal([1, 2, 3])
+  fold.to_list(b) |> should.equal([1, 2, 3])
+}
+
+pub fn broadcast_bounded_high_limit_matches_broadcast_test() {
+  // With a max_queue at least as large as the source length, the
+  // bound is never reached and behaviour matches `broadcast`.
+  let assert [a, b] =
+    stream.broadcast_bounded(
+      over: from_list([1, 2, 3, 4, 5]),
+      into: 2,
+      max_queue: 100,
+    )
+  fold.to_list(a) |> should.equal([1, 2, 3, 4, 5])
+  fold.to_list(b) |> should.equal([1, 2, 3, 4, 5])
+}
+
+@target(erlang)
+pub fn broadcast_bounded_panics_when_slow_consumer_overflows_test() {
+  // a pulls aggressively while b stays paused. After enough fanouts
+  // b's queue exceeds max_queue and the next a-pull panics.
+  let did_panic =
+    panicked(fn() {
+      let assert [a, _b] =
+        stream.broadcast_bounded(
+          over: from_list([1, 2, 3, 4, 5]),
+          into: 2,
+          max_queue: 2,
+        )
+      let _drained = fold.to_list(a)
+      Nil
+    })
+  did_panic |> should.be_true
+}
+
+@target(erlang)
+pub fn broadcast_bounded_zero_consumers_panics_test() {
+  let did_panic =
+    panicked(fn() {
+      let _result =
+        stream.broadcast_bounded(
+          over: from_list([1, 2, 3]),
+          into: 0,
+          max_queue: 4,
+        )
+      Nil
+    })
+  did_panic |> should.be_true
+}
+
+@target(erlang)
+pub fn broadcast_bounded_zero_max_queue_panics_test() {
+  let did_panic =
+    panicked(fn() {
+      let _result =
+        stream.broadcast_bounded(
+          over: from_list([1, 2, 3]),
+          into: 2,
+          max_queue: 0,
+        )
+      Nil
+    })
+  did_panic |> should.be_true
+}
+
 pub fn unzip_round_trip_with_zip_test() {
   let zipped = stream.zip(from_list([1, 2, 3]), from_list(["a", "b", "c"]))
   let #(left, right) = stream.unzip(zipped)

@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **stream**: `stream.broadcast_bounded(over: Stream(a), into: Int,
+  max_queue: Int)` — the bounded fan-out sibling of
+  `stream.broadcast`. Each per-consumer queue is capped at
+  `max_queue` elements; a fanned-out element that would push any
+  queue past the bound triggers a structured panic on the next
+  upstream pull instead of letting memory grow until OOM. Use this
+  in production fan-outs (HTTP multicast, websocket pub/sub, Kafka
+  producer tees, …) where a stalled slow consumer must surface as a
+  crash. The `broadcast` docstring now also documents the
+  `O(max_pull_distance × n)` worst-case memory footprint of the
+  unbounded variant, and the README's new "Backpressure" subsection
+  cross-links `buffer`, `broadcast`, and `broadcast_bounded` so
+  consumers pick the right tool. (#205)
+
 ### Documentation
 
 - **stream**: `take` and `drop` docstrings now spell out the
