@@ -40,8 +40,43 @@ pub fn range_counts_down_when_start_greater_than_stop_test() {
   source.range(from: 5, to: 0) |> fold.to_list |> should.equal([5, 4, 3, 2, 1])
 }
 
+// Regression pin for the documented "from > to auto-reverses" surprise.
+pub fn range_descending_silently_when_args_swapped_test() {
+  source.range(from: 5, to: 1) |> fold.to_list |> should.equal([5, 4, 3, 2])
+}
+
 pub fn range_is_empty_when_start_equals_stop_test() {
   source.range(from: 3, to: 3) |> fold.to_list |> should.equal([])
+}
+
+pub fn range_strict_yields_ascending_when_start_less_than_stop_test() {
+  let assert Ok(s) = source.range_strict(from: 0, to: 5)
+  s |> fold.to_list |> should.equal([0, 1, 2, 3, 4])
+}
+
+pub fn range_strict_yields_empty_when_start_equals_stop_test() {
+  let assert Ok(s) = source.range_strict(from: 3, to: 3)
+  s |> fold.to_list |> should.equal([])
+}
+
+pub fn range_strict_errors_when_start_greater_than_stop_test() {
+  source.range_strict(from: 5, to: 1)
+  |> should.equal(Error(source.DescendingNotAllowed))
+}
+
+pub fn range_descending_yields_descending_when_start_greater_than_stop_test() {
+  let assert Ok(s) = source.range_descending(from: 5, to: 0)
+  s |> fold.to_list |> should.equal([5, 4, 3, 2, 1])
+}
+
+pub fn range_descending_yields_empty_when_start_equals_stop_test() {
+  let assert Ok(s) = source.range_descending(from: 3, to: 3)
+  s |> fold.to_list |> should.equal([])
+}
+
+pub fn range_descending_errors_when_start_less_than_stop_test() {
+  source.range_descending(from: 1, to: 5)
+  |> should.equal(Error(source.AscendingNotAllowed))
 }
 
 pub fn repeat_with_take_yields_n_copies_test() {

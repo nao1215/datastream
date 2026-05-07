@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **source**: `range_strict` and `range_descending` — directional
+  siblings of `source.range` that fail loudly on swapped arguments.
+  `range_strict(from:, to:)` returns `Error(DescendingNotAllowed)`
+  when `from > to`, and `range_descending(from:, to:)` returns
+  `Error(AscendingNotAllowed)` when `from < to`. Reach for these
+  when the caller's intent is directional (buffer indices, time
+  bounds, paginated offsets) and a swapped pair of inputs should
+  surface as an error rather than a silent backwards stream.
+  `from == to` stays the empty-stream success case on both. (#210)
+
+### Documentation
+
+- **source.range**: hoisted the "argument order signals direction"
+  surprise out of the long docstring into a dedicated
+  `## Surprising behaviour` callout, with explicit cross-links to
+  `gleam/int.range` (stop-EXCLUSIVE, rejects `from > to`) and
+  `gleam/list.range` (stop-INCLUSIVE, direction-implicit) so users
+  coming from the stdlib can see at a glance which convention
+  `source.range` follows. (#210)
+
 ## [0.12.0] - 2026-05-07
 
 ### Added
