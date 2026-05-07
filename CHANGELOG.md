@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-05-07
+
 ### Added
 
 - **sink**: every pure terminal that previously lived only in
