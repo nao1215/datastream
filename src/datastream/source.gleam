@@ -59,10 +59,34 @@ pub fn from_list(list: List(a)) -> Stream(a) {
 /// source.range(from: 5, to: 1) |> fold.to_list  // [5, 4, 3, 2]
 /// ```
 ///
+/// ## Surprising behaviour: argument order signals direction
+///
+/// `range` is **direction-implicit**: passing `from > to` produces a
+/// **descending** stream, not the empty stream. Callers who think they
+/// are guarding against negative iteration with
+/// `source.range(from: end, to: start)` get a backwards stream of
+/// indices instead.
+///
+/// Pick the variant that matches your intent:
+///
+/// - Want **ascending only** and an explicit failure on swapped
+///   arguments? Use `range_strict` — it returns
+///   `Error(DescendingNotAllowed)` when `from > to`.
+/// - Want **descending only** and an explicit failure on swapped
+///   arguments? Use `range_descending` — it returns
+///   `Error(AscendingNotAllowed)` when `from < to`.
+/// - Don't care about direction? Stick with `range`.
+///
+/// ## Stop-EXCLUSIVE vs. stop-INCLUSIVE in the stdlib
+///
 /// Stdlib has two `range` shapes with different conventions:
 ///
 /// - `gleam/int.range` (fold form) is **stop-EXCLUSIVE**, matching this
-///   function.
+///   function. `int.range` also rejects `from > to` by yielding the
+///   empty fold rather than reversing direction.
+/// - `gleam/list.range` is **stop-INCLUSIVE** *and* direction-implicit:
+///   `list.range(1, 5)` yields `[1, 2, 3, 4, 5]`, `list.range(5, 1)`
+///   yields `[5, 4, 3, 2, 1]`.
 /// - `gleam/yielder.range` (pull-based stream form) is
 ///   **stop-INCLUSIVE** — `yielder.range(from: 1, to: 5)` yields
 ///   `[1, 2, 3, 4, 5]` and `yielder.range(from: 0, to: 0)` yields
@@ -87,6 +111,82 @@ pub fn range(from start: Int, to stop: Int) -> Stream(Int) {
         }
       })
     }
+  }
+}
+
+/// Reasons a directional range constructor can refuse the inputs.
+///
+/// `DescendingNotAllowed` is returned by `range_strict` when
+/// `from > to`. `AscendingNotAllowed` is returned by `range_descending`
+/// when `from < to`. Both keep `from == to` as the empty-stream case
+/// (success) so callers do not have to special-case zero-width ranges.
+pub type RangeError {
+  DescendingNotAllowed
+  AscendingNotAllowed
+}
+
+/// Stop-EXCLUSIVE **ascending-only** integer range.
+///
+/// Mirrors `range` for `from <= to` and rejects `from > to` with
+/// `Error(DescendingNotAllowed)`. Reach for this when "swapped
+/// arguments" should be a hard error rather than a silent backwards
+/// stream — the typical case when `from`/`to` are derived from caller
+/// state (buffer indices, time bounds, paginated offsets).
+///
+/// `from == to` produces `Ok(empty())`, matching `range`'s zero-width
+/// behaviour.
+///
+/// Examples:
+///
+/// ```gleam
+/// source.range_strict(from: 1, to: 5)
+/// // Ok(<stream of [1, 2, 3, 4]>)
+///
+/// source.range_strict(from: 3, to: 3)
+/// // Ok(<empty stream>)
+///
+/// source.range_strict(from: 5, to: 1)
+/// // Error(DescendingNotAllowed)
+/// ```
+pub fn range_strict(
+  from start: Int,
+  to stop: Int,
+) -> Result(Stream(Int), RangeError) {
+  case start > stop {
+    True -> Error(DescendingNotAllowed)
+    False -> Ok(range(from: start, to: stop))
+  }
+}
+
+/// Stop-EXCLUSIVE **descending-only** integer range.
+///
+/// Mirrors `range` for `from >= to` and rejects `from < to` with
+/// `Error(AscendingNotAllowed)`. Use this when descending iteration is
+/// the deliberate intent (reverse traversal, countdowns) and an
+/// accidentally ascending pair of inputs should fail loudly.
+///
+/// `from == to` produces `Ok(empty())`, matching `range`'s zero-width
+/// behaviour.
+///
+/// Examples:
+///
+/// ```gleam
+/// source.range_descending(from: 5, to: 1)
+/// // Ok(<stream of [5, 4, 3, 2]>)
+///
+/// source.range_descending(from: 3, to: 3)
+/// // Ok(<empty stream>)
+///
+/// source.range_descending(from: 1, to: 5)
+/// // Error(AscendingNotAllowed)
+/// ```
+pub fn range_descending(
+  from start: Int,
+  to stop: Int,
+) -> Result(Stream(Int), RangeError) {
+  case start < stop {
+    True -> Error(AscendingNotAllowed)
+    False -> Ok(range(from: start, to: stop))
   }
 }
 
