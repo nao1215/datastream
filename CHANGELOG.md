@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-05-07
+
 ### Added
 
 - **source**: `range_strict` and `range_descending` — directional
