@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Documentation
+
+- **stream**: `take` and `drop` docstrings now spell out the
+  `n == 0` resource-handling asymmetry side-by-side: `take(s, 0)`
+  closes the upstream eagerly on the first pull; `drop(s, 0)` is the
+  identity and does not pre-close. The `take` docstring carries the
+  authoritative table, and `drop` cross-references it. Callers
+  building `drop(s, 0)` for unknown `n` and discarding the stream
+  without consuming it must close `s` themselves; the recommended
+  practice (drive through a terminal regardless of which branch the
+  runtime took) is documented inline. (#204)
+
 ## [0.11.0] - 2026-05-05
 
 ### Added

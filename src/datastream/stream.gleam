@@ -78,6 +78,40 @@ fn filter_pull(
 /// Stops pulling upstream the moment the `n`th element has been
 /// emitted, and closes the upstream on that early exit. This is what
 /// makes `take` safe on infinite resource-backed sources.
+///
+/// **Resource handling at `n == 0`** — early-exit semantics extend to
+/// the degenerate case: the first `pull` returns `Done` *and* closes
+/// the upstream. This is asymmetric with `drop(s, 0)`, which is the
+/// identity (no close, no pull). For dynamic-`n` pipelines built from
+/// `take_checked` / `drop_checked` where `n` may end up `0`, see the
+/// "Asymmetry of `take(s, 0)` and `drop(s, 0)`" subsection below for
+/// guidance.
+///
+/// ## Asymmetry of `take(s, 0)` and `drop(s, 0)`
+///
+/// | Constructor   | Pull behaviour at `n == 0`           | Resource handling      |
+/// |---------------|---------------------------------------|------------------------|
+/// | `take(s, 0)`  | First pull returns `Done`            | Closes `s` eagerly     |
+/// | `drop(s, 0)`  | Identity (first pull pulls from `s`) | Does **not** pre-close |
+///
+/// Both choices follow each constructor's primary semantics
+/// (`take` is early-exit; `drop` is identity), but the combination
+/// surprises callers who treat the two as duals. Practical
+/// consequences:
+///
+/// - **`take(s, 0)` discarded without consumption** — upstream is
+///   auto-closed on the first pull, but if no terminal ever pulls,
+///   the resource stays open until the calling process exits.
+/// - **`drop(s, 0)` discarded without consumption** — upstream is
+///   never touched. Callers that build `drop(s, 0)` and throw away
+///   the result must close `s` themselves to avoid leaking
+///   resource-backed sources (`source.try_resource`, file handles,
+///   sockets).
+///
+/// When `n` comes from config / CLI / request parameters and may be
+/// `0`, prefer driving the resulting stream through a terminal
+/// (`fold.to_list`, `sink.each`, …) so the close path runs
+/// regardless of which branch the runtime took.
 pub fn take(from stream: Stream(a), up_to n: Int) -> Stream(a) {
   case n < 0 {
     True -> panic as "datastream/stream.take: count must be >= 0"
@@ -109,6 +143,14 @@ fn take_active(stream: Stream(a), n: Int) -> Stream(a) {
 /// `n` MUST be `>= 0`. A negative `n` is rejected at construction
 /// time with a panic per the `datastream` module-level
 /// invalid-argument policy.
+///
+/// **Resource handling at `n == 0`** — identity semantics: no
+/// upstream pull, no close. Asymmetric with `take(s, 0)` (which
+/// closes eagerly). Callers building `drop(s, 0)` for unknown `n`
+/// and discarding the result without consuming it are responsible
+/// for closing `s` themselves. See `take`'s "Asymmetry of `take(s,
+/// 0)` and `drop(s, 0)`" subsection above for the side-by-side table
+/// and recommended practice.
 pub fn drop(from stream: Stream(a), up_to n: Int) -> Stream(a) {
   case n < 0 {
     True -> panic as "datastream/stream.drop: count must be >= 0"
