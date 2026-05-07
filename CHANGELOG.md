@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **sink**: every pure terminal that previously lived only in
+  `datastream/fold` (`to_list`, `to_string`, `to_string_tree`,
+  `to_bit_array`, `count`, `first`, `last`, `fold`, `reduce`, `drain`,
+  `all`, `any`, `find`, `sum_int`, `sum_float`, `product_int`,
+  `collect_result`, `partition_result`, `partition_map`) is now
+  re-exported from `datastream/sink` so a single import covers both
+  pure reductions and side-effecting consumers (`each`, `try_each`,
+  `println`). New code should reach for `import datastream/sink`; the
+  `datastream/fold` module is kept as a backward-compatible alias and
+  may be removed in a future major release. The README's Quick Start
+  and the Module guide are updated to lead with `sink`. (#203)
+
 - **stream**: `stream.broadcast_bounded(over: Stream(a), into: Int,
   max_queue: Int)` — the bounded fan-out sibling of
   `stream.broadcast`. Each per-consumer queue is capped at

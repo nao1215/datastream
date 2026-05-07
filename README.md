@@ -36,7 +36,7 @@ do not need lazy pulls, replayable pipelines, or deterministic cleanup.
 ## Quick start
 
 ```gleam
-import datastream/fold
+import datastream/sink
 import datastream/source
 import datastream/stream
 import gleam/io
@@ -46,7 +46,7 @@ pub fn main() {
     source.iterate(from: 1, with: fn(x) { x + 1 })
     |> stream.map(with: fn(x) { x * 2 })
     |> stream.take(up_to: 5)
-    |> fold.to_list
+    |> sink.to_list
 
   io.debug(result)
   // [2, 4, 6, 8, 10]
@@ -281,8 +281,8 @@ straight to source.
 - `datastream`: defines `Stream(a)` and `Step(a, state)`
 - `datastream/source`: constructors for list-backed, generated, and resource-backed streams
 - `datastream/stream`: lazy combinators such as `map`, `filter`, `flat_map`, `zip`, `take`, and `chunks_of`
-- `datastream/fold`: pure terminals such as `to_list`, `sum`, `first`, `find`, and `collect_result`
-- `datastream/sink`: effectful terminals such as `each` and `try_each`
+- `datastream/sink`: every terminal — pure reductions (`to_list`, `count`, `fold`, `first`, `find`, `collect_result`, …) and side-effecting consumers (`each`, `try_each`, `println`)
+- `datastream/fold`: legacy alias for the pure-reduction subset of `sink`. Re-exports the same functions for backward compatibility; new code should reach for `datastream/sink` instead
 - `datastream/chunk`: opaque finite batches
 - `datastream/text`: chunk-aware UTF-8 decode and line splitting
 - `datastream/binary`: byte and framing helpers
