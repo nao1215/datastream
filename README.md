@@ -312,6 +312,36 @@ The main checked families are:
 - `binary.length_prefixed_checked`, `binary.length_prefixed_with_checked`, `binary.fixed_size_checked`
 - `datastream/erlang/par.*_checked`
 
+## Backpressure
+
+Two combinators interact with backpressure between a producer and one
+or more consumers:
+
+- **`stream.buffer(stream, prefetch:)`** prefetches up to `prefetch`
+  elements ahead of the consumer, so a latency-bound upstream (HTTP body
+  bytes, slow disk reads) does not serialise the consumer's per-element
+  work. The buffer is bounded by `prefetch`; a slow consumer cannot
+  blow it past that capacity.
+- **`stream.broadcast(stream, n)`** fans one source out to `n`
+  independent consumers, each pulling at its own pace. Per-consumer
+  queues are **unbounded**: if one consumer pulls aggressively while
+  another pauses, the slow consumer's queue grows by the per-consumer
+  pull-distance. The worst-case memory footprint is
+  `O(max_pull_distance × n)`. For cardinality-unbounded sources
+  (`source.iterate`, `source.repeat`) this is a silent memory hazard.
+- **`stream.broadcast_bounded(stream, n, max_queue:)`** is the
+  bounded variant: any consumer queue exceeding `max_queue` triggers
+  a structured panic on the next upstream pull. Use it in production
+  fan-outs (HTTP multicast, websocket pub/sub, Kafka producer tees,
+  ...) where a stalled slow consumer must surface as a crash instead
+  of an OOM.
+
+If you only have one consumer and just want to overlap producer work
+with consumer work, reach for `buffer`. If you genuinely need fan-out
+to multiple consumers and your source is bounded, `broadcast` is fine.
+If the source is unbounded or production-critical, default to
+`broadcast_bounded`.
+
 ## Web framework compatibility
 
 `datastream` depends on `gleam_erlang >= 1.3.0` and

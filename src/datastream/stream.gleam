@@ -819,6 +819,11 @@ type BroadcastState(a) {
     upstream: Option(Stream(a)),
     queues: List(List(a)),
     active: List(Bool),
+    /// `None` for `broadcast` (unbounded queues). `Some(k)` for
+    /// `broadcast_bounded`, where any consumer queue exceeding `k`
+    /// elements triggers a structured panic on the next upstream
+    /// pull.
+    max_queue: Option(Int),
   )
 }
 
@@ -837,12 +842,25 @@ type BroadcastState(a) {
 /// with a panic per the `datastream` module-level invalid-argument
 /// policy.
 ///
-/// **Buffer size:** the per-consumer queue is currently unbounded.
-/// A consumer that never pulls while another pulls aggressively will
-/// accumulate the entire stream in its queue; users with that risk
-/// should compose `broadcast(..., n) |> list.map(stream.take(_, k))`
-/// or its equivalent. A bounded variant with an explicit drop policy
-/// is left as a follow-up — see the Roadmap.
+/// **Buffer size — unbounded by design.** Per-consumer queues grow
+/// without limit. The worst-case memory footprint is
+/// `O(max_pull_distance × n)`, where `max_pull_distance` is the
+/// difference between the fastest and slowest consumer's pull count
+/// at any point in time, and `n` is the consumer count. Concretely:
+/// if consumer A pulls 1 000 000 elements while B is paused, B's
+/// queue holds 1 000 000 elements until B catches up.
+///
+/// For resource-backed sources of bounded cardinality this is fine.
+/// For cardinality-unbounded sources (`source.iterate`,
+/// `source.repeat`, `source.unfold` of an infinite seed) it is a
+/// silent memory hazard. Two safer composition patterns:
+///
+/// - **Cap each consumer**: `broadcast(s, n) |> list.map(stream.take(_, k))`
+///   so the slowest consumer's queue is bounded by `k - 1`.
+/// - **Use `broadcast_bounded(s, n, max_queue)`** for an explicit
+///   per-consumer queue limit. Exceeding the limit panics with a
+///   structured message rather than letting the process OOM in
+///   production.
 ///
 /// **Cross-target:** implemented via a small FFI-backed mutable
 /// reference (`datastream/internal/ref`). On Erlang the cell is a
@@ -863,10 +881,64 @@ pub fn broadcast(over stream: Stream(a), into n: Int) -> List(Stream(a)) {
           upstream: Some(stream),
           queues: list.repeat([], times: n),
           active: list.repeat(True, times: n),
+          max_queue: None,
         )
       let state_ref = ref.new(initial)
       build_consumers(state_ref, n, [])
     }
+  }
+}
+
+/// Like `broadcast`, but each per-consumer queue is capped at
+/// `max_queue` elements. If a fanned-out element would push any
+/// consumer's queue beyond that bound, the next upstream pull panics
+/// with a structured message naming the limit. Use this in
+/// production wiring (HTTP fan-out, websocket multicast, Kafka
+/// producer tees, …) where a stalled slow consumer must surface as a
+/// crash instead of an OOM.
+///
+/// `n` MUST be `>= 1` and `max_queue` MUST be `>= 1`. Both checks
+/// are construction-time and panic on failure, matching the
+/// `datastream` module-level invalid-argument policy.
+///
+/// Behaviour on success is identical to `broadcast(s, n)` until the
+/// queue bound is hit. Until then there is no overhead beyond a
+/// per-pull `list.length` check on the freshly-enqueued queues.
+///
+/// **What "exceeded" means.** The check fires *after* the producing
+/// pull has already enqueued the element to every still-alive
+/// consumer that wasn't the puller. A consumer queue that was at
+/// `max_queue - 1` and gets one more element is fine; one that was
+/// at `max_queue` and would become `max_queue + 1` triggers the
+/// panic. The slowest consumer therefore has up to `max_queue`
+/// elements in its queue before the next overflowing pull stops the
+/// pipeline.
+///
+/// Pair with `broadcast`'s docstring above for the queue-growth
+/// formula and the unbounded baseline.
+pub fn broadcast_bounded(
+  over stream: Stream(a),
+  into n: Int,
+  max_queue max_queue: Int,
+) -> List(Stream(a)) {
+  case n < 1 {
+    True -> panic as "datastream/stream.broadcast_bounded: n must be >= 1"
+    False ->
+      case max_queue < 1 {
+        True ->
+          panic as "datastream/stream.broadcast_bounded: max_queue must be >= 1"
+        False -> {
+          let initial =
+            BroadcastState(
+              upstream: Some(stream),
+              queues: list.repeat([], times: n),
+              active: list.repeat(True, times: n),
+              max_queue: Some(max_queue),
+            )
+          let state_ref = ref.new(initial)
+          build_consumers(state_ref, n, [])
+        }
+      }
   }
 }
 
@@ -911,6 +983,7 @@ fn broadcast_pull(
           upstream: state.upstream,
           queues: new_queues,
           active: state.active,
+          max_queue: state.max_queue,
         ),
       )
       Next(head, broadcast_consumer(state_ref, consumer_id))
@@ -927,28 +1000,19 @@ fn broadcast_pull(
                   upstream: None,
                   queues: state.queues,
                   active: state.active,
+                  max_queue: state.max_queue,
                 ),
               )
               Done
             }
-            Next(element, rest) -> {
-              let new_queues =
-                fanout_to_others(
-                  state.queues,
-                  state.active,
-                  consumer_id,
-                  element,
-                )
-              ref.set(
+            Next(element, rest) ->
+              broadcast_emit_and_fan_out(
                 state_ref,
-                BroadcastState(
-                  upstream: Some(rest),
-                  queues: new_queues,
-                  active: state.active,
-                ),
+                consumer_id,
+                state,
+                element,
+                rest,
               )
-              Next(element, broadcast_consumer(state_ref, consumer_id))
-            }
           }
       }
   }
@@ -967,6 +1031,7 @@ fn broadcast_close(state_ref: Ref(BroadcastState(a)), consumer_id: Int) -> Nil {
           upstream: state.upstream,
           queues: cleared_queue,
           active: new_active,
+          max_queue: state.max_queue,
         ),
       )
     False, Some(upstream) -> {
@@ -977,6 +1042,7 @@ fn broadcast_close(state_ref: Ref(BroadcastState(a)), consumer_id: Int) -> Nil {
           upstream: None,
           queues: cleared_queue,
           active: new_active,
+          max_queue: state.max_queue,
         ),
       )
     }
@@ -987,8 +1053,61 @@ fn broadcast_close(state_ref: Ref(BroadcastState(a)), consumer_id: Int) -> Nil {
           upstream: None,
           queues: cleared_queue,
           active: new_active,
+          max_queue: state.max_queue,
         ),
       )
+  }
+}
+
+/// Fan a freshly-pulled element out to other consumers, enforce the
+/// optional `max_queue` bound, persist the new state, and yield the
+/// element to the puller. Extracted from `broadcast_pull` to keep
+/// nesting shallow.
+fn broadcast_emit_and_fan_out(
+  state_ref: Ref(BroadcastState(a)),
+  consumer_id: Int,
+  state: BroadcastState(a),
+  element: a,
+  rest: Stream(a),
+) -> Step(a, Stream(a)) {
+  let new_queues =
+    fanout_to_others(state.queues, state.active, consumer_id, element)
+  maybe_assert_queue_bound(new_queues, state.max_queue)
+  ref.set(
+    state_ref,
+    BroadcastState(
+      upstream: Some(rest),
+      queues: new_queues,
+      active: state.active,
+      max_queue: state.max_queue,
+    ),
+  )
+  Next(element, broadcast_consumer(state_ref, consumer_id))
+}
+
+/// `broadcast` (unbounded) passes `None` and short-circuits;
+/// `broadcast_bounded` passes `Some(k)` and walks the post-fanout
+/// queues, panicking on overflow.
+fn maybe_assert_queue_bound(
+  queues: List(List(a)),
+  max_queue: Option(Int),
+) -> Nil {
+  case max_queue {
+    None -> Nil
+    Some(limit) -> assert_queue_bound(queues, limit)
+  }
+}
+
+/// Walk every consumer queue in the post-fanout state and panic if
+/// any of them now exceeds the bound. Called only by
+/// `broadcast_bounded`. The structured panic message is the public
+/// signal that a slow consumer has stalled the pipeline beyond the
+/// caller's tolerated buffer size.
+fn assert_queue_bound(queues: List(List(a)), max: Int) -> Nil {
+  case list.find(queues, fn(q) { list.length(q) > max }) {
+    Ok(_) ->
+      panic as "datastream/stream.broadcast_bounded: a consumer's queue exceeded max_queue (slow consumer stalling fast producer)"
+    Error(_) -> Nil
   }
 }
 
