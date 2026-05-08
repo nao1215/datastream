@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-05-08
+
 ### Added
 - **fold / sink**: `to_string_join(stream:, with: separator)` and the
   `StringTree`-returning sibling `to_string_tree_join/2` are the
