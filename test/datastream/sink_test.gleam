@@ -1,6 +1,7 @@
 import datastream.{Done, Next}
 import datastream/sink
 import datastream/source
+import gleam/string_tree
 import gleeunit
 import gleeunit/should
 
@@ -88,4 +89,29 @@ pub fn try_each_does_not_visit_elements_after_error_test() {
 
 pub fn println_runs_to_completion_on_empty_test() {
   source.empty() |> sink.println |> should.equal(Nil)
+}
+
+// --- to_string_join re-export (#213) ---
+
+pub fn sink_to_string_join_re_export_test() {
+  from_list(["row1", "row2", "row3"])
+  |> sink.to_string_join(with: "\n")
+  |> should.equal("row1\nrow2\nrow3")
+}
+
+pub fn sink_to_string_join_empty_test() {
+  source.empty()
+  |> sink.to_string_join(with: ",")
+  |> should.equal("")
+}
+
+pub fn sink_to_string_tree_join_re_export_test() {
+  // The tree variant must produce the same final String once the
+  // tree is materialised as the direct sink.to_string_join would.
+  let direct = from_list(["a", "b", "c"]) |> sink.to_string_join(with: "-")
+  let via_tree =
+    from_list(["a", "b", "c"])
+    |> sink.to_string_tree_join(with: "-")
+    |> string_tree.to_string
+  via_tree |> should.equal(direct)
 }

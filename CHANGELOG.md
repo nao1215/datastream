@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- **fold / sink**: `to_string_join(stream:, with: separator)` and the
+  `StringTree`-returning sibling `to_string_tree_join/2` are the
+  streaming counterpart of `gleam/string.join/2`. They concatenate the
+  elements of a `Stream(String)` with `separator` between consecutive
+  elements (no leading or trailing separator) and accumulate into a
+  `StringTree` so the cost stays `O(total length)` on long streams.
+  Use when emitting CSV / NDJSON / log lines / single-line digests
+  that need a fixed delimiter without breaking the laziness of the
+  upstream pipeline. Available on both `datastream/fold` (canonical)
+  and `datastream/sink` (re-export). Empty stream → `""`; single
+  element → the element itself with no separator. (#213)
+
 ## [0.13.0] - 2026-05-07
 
 ### Added
