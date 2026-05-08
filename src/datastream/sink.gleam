@@ -97,6 +97,26 @@ pub fn to_string_tree(stream: Stream(String)) -> StringTree {
   fold.to_string_tree(stream)
 }
 
+/// Materialise a `Stream(String)` into a single `String` with
+/// `separator` between consecutive elements. Streaming counterpart of
+/// `gleam/string.join/2`. Re-exported from
+/// `datastream/fold.to_string_join`. (#213)
+pub fn to_string_join(
+  stream stream: Stream(String),
+  with separator: String,
+) -> String {
+  fold.to_string_join(stream:, with: separator)
+}
+
+/// `StringTree` variant of `to_string_join`. Re-exported from
+/// `datastream/fold.to_string_tree_join`. (#213)
+pub fn to_string_tree_join(
+  stream stream: Stream(String),
+  with separator: String,
+) -> StringTree {
+  fold.to_string_tree_join(stream:, with: separator)
+}
+
 /// Materialise a `Stream(BitArray)` into a single concatenated
 /// `BitArray`. Re-exported from `datastream/fold.to_bit_array`.
 pub fn to_bit_array(stream: Stream(BitArray)) -> BitArray {

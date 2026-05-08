@@ -303,3 +303,60 @@ pub fn partition_map_routes_via_split_test() {
   })
   |> should.equal(#([2, 4], [1, 3]))
 }
+
+// --- to_string_join: streaming counterpart of string.join (#213) ---
+
+pub fn to_string_join_empty_returns_empty_string_test() {
+  from_list([])
+  |> fold.to_string_join(with: ",")
+  |> should.equal("")
+}
+
+pub fn to_string_join_single_element_no_separator_test() {
+  // Single element: separator must NOT appear before or after.
+  from_list(["alone"])
+  |> fold.to_string_join(with: ",")
+  |> should.equal("alone")
+}
+
+pub fn to_string_join_three_elements_test() {
+  from_list(["a", "b", "c"])
+  |> fold.to_string_join(with: ",")
+  |> should.equal("a,b,c")
+}
+
+pub fn to_string_join_newline_separator_test() {
+  from_list(["row1", "row2", "row3"])
+  |> fold.to_string_join(with: "\n")
+  |> should.equal("row1\nrow2\nrow3")
+}
+
+pub fn to_string_join_multi_char_separator_test() {
+  from_list(["a", "b", "c"])
+  |> fold.to_string_join(with: " | ")
+  |> should.equal("a | b | c")
+}
+
+pub fn to_string_join_empty_separator_matches_to_string_test() {
+  // Empty separator must produce the same output as plain `to_string`.
+  let stream_join = fold.to_string_join(from_list(["x", "y", "z"]), with: "")
+  let stream_concat = fold.to_string(from_list(["x", "y", "z"]))
+  stream_join |> should.equal(stream_concat)
+}
+
+pub fn to_string_join_preserves_empty_string_elements_test() {
+  // Empty-string element must still trigger separator emission;
+  // the output ", , " has two separators between three elements.
+  from_list(["", "", ""])
+  |> fold.to_string_join(with: ", ")
+  |> should.equal(", , ")
+}
+
+pub fn to_string_tree_join_matches_to_string_join_test() {
+  let stream = from_list(["a", "b", "c"])
+  let via_tree =
+    fold.to_string_tree_join(stream, with: "-")
+    |> string_tree.to_string
+  let via_string = fold.to_string_join(from_list(["a", "b", "c"]), with: "-")
+  via_tree |> should.equal(via_string)
+}

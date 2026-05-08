@@ -50,6 +50,49 @@ pub fn to_string_tree(stream: Stream(String)) -> StringTree {
   })
 }
 
+/// Materialise a `Stream(String)` into a single `String` with `separator`
+/// inserted between consecutive elements (but not before the first or
+/// after the last). Streaming counterpart of `gleam/string.join/2`.
+///
+/// Internally accumulates into a `StringTree`, so the cost stays
+/// `O(total length)` even for long streams — no intermediate list
+/// materialisation. Returns `""` on an empty stream and the lone
+/// element on a single-element stream (no separator).
+///
+/// Use when emitting CSV / NDJSON / log lines / single-line digests
+/// that need a fixed delimiter between elements without breaking the
+/// laziness of the upstream pipeline. (#213)
+pub fn to_string_join(
+  stream stream: Stream(String),
+  with separator: String,
+) -> String {
+  stream
+  |> to_string_tree_join(with: separator)
+  |> string_tree.to_string
+}
+
+/// `StringTree` variant of `to_string_join` for callers that want to
+/// keep building the tree — prepending a header, joining with another
+/// tree — before producing the final `String`. Same separator
+/// semantics as `to_string_join`. (#213)
+pub fn to_string_tree_join(
+  stream stream: Stream(String),
+  with separator: String,
+) -> StringTree {
+  let #(tree, _seen) =
+    fold(over: stream, from: #(string_tree.new(), False), with: fn(acc, chunk) {
+      let #(tree, seen) = acc
+      case seen {
+        False -> #(string_tree.append(tree, chunk), True)
+        True -> {
+          let with_sep = string_tree.append(tree, separator)
+          #(string_tree.append(with_sep, chunk), True)
+        }
+      }
+    })
+  tree
+}
+
 /// Materialise a `Stream(BitArray)` into a single concatenated `BitArray`.
 ///
 /// Internally accumulates into a `BytesTree`, which bridges to Erlang's
