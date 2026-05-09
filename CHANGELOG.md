@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- Property-based tests using
+  [metamon](https://github.com/nao1215/metamon) covering the
+  cross-target stream core (`source` constructors, `stream`
+  combinators, `fold` terminals). Lives in
+  `test/datastream_metamon_test.gleam`. Highlights:
+  `from_list ↔ to_list` round-trip; `count` matches list length;
+  `map` preserves length, agrees with `list.map`, satisfies the
+  functor composition law; `filter` is order-preserving and matches
+  `list.filter`; chained `filter` is equivalent to a single
+  `filter` with `&&`; `take(n) ++ drop(n)` recovers the original;
+  `take`/`drop` agree with `list.take`/`list.drop`;
+  `take(s, 0)` is empty and `drop(s, 0)` is identity; `append`
+  concatenates lengths and content with a two-sided empty identity;
+  `range(from: a, to: a + n)` has count `n` and `range(from: x,
+  to: x)` is empty; `sum_int`/`first`/`last`/`all`/`any` agree with
+  the list equivalents.
+
 ## [0.14.0] - 2026-05-08
 
 ### Added
