@@ -112,7 +112,7 @@ fn filter_pull(
 /// `0`, prefer driving the resulting stream through a terminal
 /// (`fold.to_list`, `sink.each`, …) so the close path runs
 /// regardless of which branch the runtime took.
-pub fn take(from stream: Stream(a), up_to n: Int) -> Stream(a) {
+pub fn take(over stream: Stream(a), up_to n: Int) -> Stream(a) {
   case n < 0 {
     True -> panic as "datastream/stream.take: count must be >= 0"
     False -> take_active(stream, n)
@@ -151,7 +151,7 @@ fn take_active(stream: Stream(a), n: Int) -> Stream(a) {
 /// for closing `s` themselves. See `take`'s "Asymmetry of `take(s,
 /// 0)` and `drop(s, 0)`" subsection above for the side-by-side table
 /// and recommended practice.
-pub fn drop(from stream: Stream(a), up_to n: Int) -> Stream(a) {
+pub fn drop(over stream: Stream(a), up_to n: Int) -> Stream(a) {
   case n < 0 {
     True -> panic as "datastream/stream.drop: count must be >= 0"
     False -> drop_active(stream, n)
@@ -187,19 +187,19 @@ pub type StreamArgError {
 /// dynamic input (CLI, config, request parameters).
 ///
 /// On success the stream behaves identically to
-/// `take(from: stream, up_to: n)`.
+/// `take(over: stream, up_to: n)`.
 ///
 /// The caller is responsible for closing `stream` if the
 /// constructor returns `Error` — no upstream pull happens, but the
 /// upstream is otherwise untouched.
 ///
 /// Example:
-///   case stream.take_checked(from: src, up_to: configured_limit) {
+///   case stream.take_checked(over: src, up_to: configured_limit) {
 ///     Ok(s) -> ...
 ///     Error(stream.NegativeCount(function: _, given: g)) -> ...
 ///   }
 pub fn take_checked(
-  from stream: Stream(a),
+  over stream: Stream(a),
   up_to n: Int,
 ) -> Result(Stream(a), StreamArgError) {
   case n < 0 {
@@ -213,12 +213,12 @@ pub fn take_checked(
 /// dynamic input.
 ///
 /// On success the stream behaves identically to
-/// `drop(from: stream, up_to: n)`.
+/// `drop(over: stream, up_to: n)`.
 ///
 /// The caller is responsible for closing `stream` if the
 /// constructor returns `Error`.
 pub fn drop_checked(
-  from stream: Stream(a),
+  over stream: Stream(a),
   up_to n: Int,
 ) -> Result(Stream(a), StreamArgError) {
   case n < 0 {
@@ -254,7 +254,7 @@ fn drop_pull(stream: Stream(a), n: Int) -> Step(a, Stream(a)) {
 /// `False`, so `take_while` terminates on infinite resource-backed
 /// sources whose prefix eventually fails the predicate.
 pub fn take_while(
-  in stream: Stream(a),
+  over stream: Stream(a),
   satisfying predicate: fn(a) -> Bool,
 ) -> Stream(a) {
   datastream.make(
@@ -262,7 +262,7 @@ pub fn take_while(
       case datastream.pull(stream) {
         Next(element, rest) ->
           case predicate(element) {
-            True -> Next(element, take_while(in: rest, satisfying: predicate))
+            True -> Next(element, take_while(over: rest, satisfying: predicate))
             False -> {
               datastream.close(rest)
               Done
@@ -277,7 +277,7 @@ pub fn take_while(
 
 /// Discard the longest prefix where `predicate` holds, then yield the rest.
 pub fn drop_while(
-  in stream: Stream(a),
+  over stream: Stream(a),
   satisfying predicate: fn(a) -> Bool,
 ) -> Stream(a) {
   datastream.make(
@@ -755,7 +755,7 @@ fn buffer_fill(
 /// is closed first, then `stream` — right-before-left, matching
 /// `zip` and `flat_map`.
 pub fn interrupt_when(
-  in stream: Stream(a),
+  over stream: Stream(a),
   signal signal: Stream(Bool),
 ) -> Stream(a) {
   interrupt_active(stream, Some(signal))

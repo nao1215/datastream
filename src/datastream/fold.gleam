@@ -220,7 +220,7 @@ pub fn any(over stream: Stream(a), satisfying predicate: fn(a) -> Bool) -> Bool 
 ///
 /// Stops pulling upstream the moment a match is observed.
 pub fn find(
-  in stream: Stream(a),
+  over stream: Stream(a),
   satisfying predicate: fn(a) -> Bool,
 ) -> Option(a) {
   case datastream.pull(stream) {
@@ -231,7 +231,7 @@ pub fn find(
           datastream.close(rest)
           Some(element)
         }
-        False -> find(in: rest, satisfying: predicate)
+        False -> find(over: rest, satisfying: predicate)
       }
   }
 }

@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- **BREAKING**: Stream operators that accept a stream as their
+  primary input now use the unified `over:` label, replacing the
+  previous mix of `from:` and `in:`. Affected functions:
+  `stream.take`, `stream.drop`, `stream.take_checked`,
+  `stream.drop_checked`, `stream.take_while`, `stream.drop_while`,
+  `stream.interrupt_when`, `fold.find`, and `sink.find` (which
+  re-exports `fold.find`). The previous labels were inconsistent
+  across the API — `take(from:, up_to:)`, `take_while(in:, satisfying:)`,
+  `filter(over:, keeping:)`, `chunks_of(over:, into:)`, etc. — which
+  forced callers to remember 5 different conventions for the
+  "container" argument. Unifying on `over:` matches the majority of
+  combinators and the shape used by `fold.fold`, `fold.all`,
+  `fold.any`. Migration: rename `from:` and `in:` to `over:` at
+  every call site of the listed functions; positional / pipe-style
+  calls like `|> stream.take(up_to: 5)` are unchanged. The other
+  `from:` / `in:` labels in the package (`source.range(from:, to:)`,
+  `source.iterate(from:, with:)`, `source.unfold(from:, with:)`,
+  `scan(over:, from: initial, ...)`, `fold(over:, from: initial, ...)`)
+  refer to *initial values* and *directional bounds*, not to the
+  container, and are intentionally left unchanged. (#218)
+
 ## [0.15.0] - 2026-05-09
 
 ### Added
