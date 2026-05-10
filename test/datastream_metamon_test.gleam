@@ -125,7 +125,7 @@ pub fn take_count_is_bounded_test() -> Nil {
     fn(pair) {
       let #(items, n) = pair
       let taken =
-        fold.count(stream.take(from: source.from_list(items), up_to: n))
+        fold.count(stream.take(over: source.from_list(items), up_to: n))
       taken <= n && taken <= list.length(items)
     },
   )
@@ -140,7 +140,7 @@ pub fn take_matches_list_take_test() -> Nil {
     fn(pair) {
       let #(items, n) = pair
       let taken =
-        fold.to_list(stream.take(from: source.from_list(items), up_to: n))
+        fold.to_list(stream.take(over: source.from_list(items), up_to: n))
       taken == list.take(items, n)
     },
   )
@@ -155,7 +155,7 @@ pub fn drop_matches_list_drop_test() -> Nil {
     fn(pair) {
       let #(items, n) = pair
       let dropped =
-        fold.to_list(stream.drop(from: source.from_list(items), up_to: n))
+        fold.to_list(stream.drop(over: source.from_list(items), up_to: n))
       dropped == list.drop(items, n)
     },
   )
@@ -170,9 +170,9 @@ pub fn take_then_drop_concat_recovers_original_test() -> Nil {
     fn(pair) {
       let #(items, n) = pair
       let taken =
-        fold.to_list(stream.take(from: source.from_list(items), up_to: n))
+        fold.to_list(stream.take(over: source.from_list(items), up_to: n))
       let dropped =
-        fold.to_list(stream.drop(from: source.from_list(items), up_to: n))
+        fold.to_list(stream.drop(over: source.from_list(items), up_to: n))
       list.append(taken, dropped) == items
     },
   )
@@ -180,13 +180,13 @@ pub fn take_then_drop_concat_recovers_original_test() -> Nil {
 
 pub fn take_zero_yields_empty_test() -> Nil {
   metamon.forall(small_int_list_generator(), fn(items) {
-    fold.to_list(stream.take(from: source.from_list(items), up_to: 0)) == []
+    fold.to_list(stream.take(over: source.from_list(items), up_to: 0)) == []
   })
 }
 
 pub fn drop_zero_is_identity_test() -> Nil {
   metamon.forall(small_int_list_generator(), fn(items) {
-    fold.to_list(stream.drop(from: source.from_list(items), up_to: 0)) == items
+    fold.to_list(stream.drop(over: source.from_list(items), up_to: 0)) == items
   })
 }
 

@@ -181,10 +181,10 @@ pub fn any(over stream: Stream(a), satisfying predicate: fn(a) -> Bool) -> Bool 
 /// Return the first element that satisfies `predicate`, or `None`.
 /// Re-exported from `datastream/fold.find`.
 pub fn find(
-  in stream: Stream(a),
+  over stream: Stream(a),
   satisfying predicate: fn(a) -> Bool,
 ) -> Option(a) {
-  fold.find(in: stream, satisfying: predicate)
+  fold.find(over: stream, satisfying: predicate)
 }
 
 /// Sum every `Int` element. Returns 0 for an empty stream.

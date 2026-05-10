@@ -135,30 +135,30 @@ pub fn drop_more_than_available_yields_empty_test() {
 }
 
 pub fn take_checked_ok_matches_take_test() {
-  let assert Ok(s) = stream.take_checked(from: from_list([1, 2, 3]), up_to: 2)
+  let assert Ok(s) = stream.take_checked(over: from_list([1, 2, 3]), up_to: 2)
   s |> fold.to_list |> should.equal([1, 2])
 }
 
 pub fn take_checked_zero_yields_empty_test() {
-  let assert Ok(s) = stream.take_checked(from: from_list([1, 2, 3]), up_to: 0)
+  let assert Ok(s) = stream.take_checked(over: from_list([1, 2, 3]), up_to: 0)
   s |> fold.to_list |> should.equal([])
 }
 
 pub fn take_checked_negative_returns_error_test() {
   let assert Error(stream.NegativeCount(function: name, given: g)) =
-    stream.take_checked(from: from_list([1, 2, 3]), up_to: -5)
+    stream.take_checked(over: from_list([1, 2, 3]), up_to: -5)
   name |> should.equal("take")
   g |> should.equal(-5)
 }
 
 pub fn drop_checked_ok_matches_drop_test() {
-  let assert Ok(s) = stream.drop_checked(from: from_list([1, 2, 3]), up_to: 1)
+  let assert Ok(s) = stream.drop_checked(over: from_list([1, 2, 3]), up_to: 1)
   s |> fold.to_list |> should.equal([2, 3])
 }
 
 pub fn drop_checked_negative_returns_error_test() {
   let assert Error(stream.NegativeCount(function: name, given: g)) =
-    stream.drop_checked(from: from_list([1, 2, 3]), up_to: -3)
+    stream.drop_checked(over: from_list([1, 2, 3]), up_to: -3)
   name |> should.equal("drop")
   g |> should.equal(-3)
 }
