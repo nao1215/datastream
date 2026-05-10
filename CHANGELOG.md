@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.16.0] - 2026-05-11
+
 ### Changed
 
 - **BREAKING**: Stream operators that accept a stream as their
