@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Documentation
+
+- `datastream/sink`: module doc-comment now opens with a "Choosing a sink" table that lists every typed-terminal sink (`to_string`, `to_string_tree`, `to_string_join`, `to_string_tree_join`, `println`, `to_bit_array`, `sum_int`, `product_int`, `sum_float`, `collect_result`, `partition_result`) alongside the stream element type each one consumes and, where relevant, the adapter to pipe through (notably `text.utf8_encode/1` for `Stream(String)` → `Stream(BitArray)`). The polymorphic sinks (`to_list`, `count`, `first`, `last`, `fold`, `reduce`, `drain`, `all`, `any`, `find`, `each`, `try_each`, `partition_map`) are called out together so callers know they never need an adapter. Includes a runnable example for the bytes-out-from-strings case raised in the issue. (#221)
+
 ## [0.16.0] - 2026-05-11
 
 ### Changed
