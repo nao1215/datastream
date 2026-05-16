@@ -9,6 +9,42 @@
 //// the caller's terminal returns a value or runs a `Nil`-typed
 //// effect.
 ////
+//// ## Choosing a sink
+////
+//// Sinks that require a specific stream element type. Pipe through
+//// the listed adapter when the upstream type does not match.
+////
+//// | Sink                  | Requires            | Adapter for other element types                       |
+//// | --------------------- | ------------------- | ----------------------------------------------------- |
+//// | `to_string`           | `Stream(String)`    | —                                                     |
+//// | `to_string_tree`      | `Stream(String)`    | —                                                     |
+//// | `to_string_join`      | `Stream(String)`    | —                                                     |
+//// | `to_string_tree_join` | `Stream(String)`    | —                                                     |
+//// | `println`             | `Stream(String)`    | —                                                     |
+//// | `to_bit_array`        | `Stream(BitArray)`  | `Stream(String)` → pipe through `text.utf8_encode/1`  |
+//// | `sum_int`             | `Stream(Int)`       | —                                                     |
+//// | `product_int`         | `Stream(Int)`       | —                                                     |
+//// | `sum_float`           | `Stream(Float)`     | —                                                     |
+//// | `collect_result`      | `Stream(Result(a, e))` | —                                                  |
+//// | `partition_result`    | `Stream(Result(a, e))` | —                                                  |
+////
+//// Sinks below accept any `Stream(a)` (and any `Stream(Result(a, e))`
+//// for `partition_map`), so they never need an adapter: `to_list`,
+//// `count`, `first`, `last`, `fold`, `reduce`, `drain`, `all`, `any`,
+//// `find`, `each`, `try_each`, `partition_map`.
+////
+//// Example — writing a `Stream(String)` out as bytes:
+////
+//// ```gleam
+//// import datastream/sink
+//// import datastream/source
+//// import datastream/text
+////
+//// source.from_list(["a,b,c\n", "1,2,3\n"])
+//// |> text.utf8_encode
+//// |> sink.to_bit_array
+//// ```
+////
 //// The pure reductions are also exported from `datastream/fold` for
 //// backward compatibility with code written against earlier
 //// versions of this library. Prefer the `datastream/sink` import
