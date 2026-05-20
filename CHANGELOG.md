@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.18.0] - 2026-05-20
+
 ### Changed
 
 - `datastream/stream`: `stream.broadcast(over: s, into: n)` and `stream.broadcast_bounded(over: s, into: n, max_queue: _)` now treat a non-positive `n` as "no consumers" — the upstream is closed immediately and the function returns the empty list — instead of panicking with `n must be >= 1`. The lenient policy matches the matching change to `stream.take` / `stream.drop` and follows the same `gleam/list.take` convention. `broadcast_bounded`'s `max_queue` validation is unchanged (a non-positive buffer capacity has no meaningful interpretation) and still panics on `max_queue < 1`. (#225)
