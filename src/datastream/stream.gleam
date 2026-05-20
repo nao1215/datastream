@@ -845,9 +845,11 @@ type BroadcastState(a) {
 /// without forcing the source to be re-evaluated, which matters for
 /// resource-backed and otherwise non-replayable sources.
 ///
-/// `n` MUST be `>= 1`. A `n < 1` is rejected at construction time
-/// with a panic per the `datastream` module-level invalid-argument
-/// policy.
+/// `n <= 0` is treated as "no consumers": the upstream is closed
+/// immediately and `broadcast` returns the empty list. The lenient
+/// convention matches `stream.take` / `stream.drop` and lets callers
+/// hand `broadcast` an arithmetic result without first guarding
+/// against an off-by-one underflow.
 ///
 /// **Buffer size — unbounded by design.** Per-consumer queues grow
 /// without limit. The worst-case memory footprint is
@@ -881,7 +883,10 @@ type BroadcastState(a) {
 /// first it self-closes, and the close callbacks are no-ops.
 pub fn broadcast(over stream: Stream(a), into n: Int) -> List(Stream(a)) {
   case n < 1 {
-    True -> panic as "datastream/stream.broadcast: n must be >= 1"
+    True -> {
+      datastream.close(stream)
+      []
+    }
     False -> {
       let initial =
         BroadcastState(
@@ -904,9 +909,12 @@ pub fn broadcast(over stream: Stream(a), into n: Int) -> List(Stream(a)) {
 /// producer tees, …) where a stalled slow consumer must surface as a
 /// crash instead of an OOM.
 ///
-/// `n` MUST be `>= 1` and `max_queue` MUST be `>= 1`. Both checks
-/// are construction-time and panic on failure, matching the
-/// `datastream` module-level invalid-argument policy.
+/// `n <= 0` is treated as "no consumers" (the upstream is closed
+/// immediately and the function returns the empty list), matching
+/// `broadcast`'s lenient convention. `max_queue` MUST still be
+/// `>= 1` — a non-positive buffer capacity has no meaningful
+/// interpretation — and is rejected at construction time with a
+/// panic that names the function.
 ///
 /// Behaviour on success is identical to `broadcast(s, n)` until the
 /// queue bound is hit. Until then there is no overhead beyond a
@@ -929,7 +937,10 @@ pub fn broadcast_bounded(
   max_queue max_queue: Int,
 ) -> List(Stream(a)) {
   case n < 1 {
-    True -> panic as "datastream/stream.broadcast_bounded: n must be >= 1"
+    True -> {
+      datastream.close(stream)
+      []
+    }
     False ->
       case max_queue < 1 {
         True ->
