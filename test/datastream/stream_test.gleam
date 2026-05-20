@@ -75,16 +75,18 @@ pub fn take_zero_yields_empty_test() {
   |> should.equal([])
 }
 
-@target(erlang)
-pub fn take_negative_panics_test() {
-  let did_panic =
-    panicked(fn() {
-      let _result =
-        from_list([1, 2, 3])
-        |> stream.take(up_to: -5)
-      Nil
-    })
-  did_panic |> should.be_true
+pub fn take_negative_yields_empty_test() {
+  from_list([1, 2, 3])
+  |> stream.take(up_to: -5)
+  |> fold.to_list
+  |> should.equal([])
+}
+
+pub fn take_very_negative_yields_empty_test() {
+  from_list([1, 2, 3, 4, 5])
+  |> stream.take(up_to: -1_000_000)
+  |> fold.to_list
+  |> should.equal([])
 }
 
 pub fn take_more_than_available_yields_all_test() {
@@ -115,16 +117,18 @@ pub fn drop_zero_is_identity_test() {
   |> should.equal([1, 2, 3])
 }
 
-@target(erlang)
-pub fn drop_negative_panics_test() {
-  let did_panic =
-    panicked(fn() {
-      let _result =
-        from_list([1, 2, 3])
-        |> stream.drop(up_to: -5)
-      Nil
-    })
-  did_panic |> should.be_true
+pub fn drop_negative_is_identity_test() {
+  from_list([1, 2, 3])
+  |> stream.drop(up_to: -5)
+  |> fold.to_list
+  |> should.equal([1, 2, 3])
+}
+
+pub fn drop_very_negative_is_identity_test() {
+  from_list([1, 2, 3, 4, 5])
+  |> stream.drop(up_to: -1_000_000)
+  |> fold.to_list
+  |> should.equal([1, 2, 3, 4, 5])
 }
 
 pub fn drop_more_than_available_yields_empty_test() {
