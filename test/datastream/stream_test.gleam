@@ -602,24 +602,16 @@ pub fn broadcast_consumer_with_take_zero_does_not_block_other_test() {
   fold.to_list(b) |> should.equal([1, 2, 3])
 }
 
-@target(erlang)
-pub fn broadcast_zero_panics_test() {
-  let did_panic =
-    panicked(fn() {
-      let _result = stream.broadcast(over: from_list([1, 2, 3]), into: 0)
-      Nil
-    })
-  did_panic |> should.be_true
+pub fn broadcast_zero_returns_empty_list_test() {
+  stream.broadcast(over: from_list([1, 2, 3]), into: 0)
+  |> list.length
+  |> should.equal(0)
 }
 
-@target(erlang)
-pub fn broadcast_negative_panics_test() {
-  let did_panic =
-    panicked(fn() {
-      let _result = stream.broadcast(over: from_list([1, 2, 3]), into: -3)
-      Nil
-    })
-  did_panic |> should.be_true
+pub fn broadcast_negative_returns_empty_list_test() {
+  stream.broadcast(over: from_list([1, 2, 3]), into: -3)
+  |> list.length
+  |> should.equal(0)
 }
 
 // --- broadcast_bounded ----------------------------------------------------
@@ -664,19 +656,16 @@ pub fn broadcast_bounded_panics_when_slow_consumer_overflows_test() {
   did_panic |> should.be_true
 }
 
-@target(erlang)
-pub fn broadcast_bounded_zero_consumers_panics_test() {
-  let did_panic =
-    panicked(fn() {
-      let _result =
-        stream.broadcast_bounded(
-          over: from_list([1, 2, 3]),
-          into: 0,
-          max_queue: 4,
-        )
-      Nil
-    })
-  did_panic |> should.be_true
+pub fn broadcast_bounded_zero_consumers_returns_empty_list_test() {
+  stream.broadcast_bounded(over: from_list([1, 2, 3]), into: 0, max_queue: 4)
+  |> list.length
+  |> should.equal(0)
+}
+
+pub fn broadcast_bounded_negative_consumers_returns_empty_list_test() {
+  stream.broadcast_bounded(over: from_list([1, 2, 3]), into: -3, max_queue: 4)
+  |> list.length
+  |> should.equal(0)
 }
 
 @target(erlang)
