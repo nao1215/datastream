@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- `datastream/stream`: `stream.take(over: s, up_to: n)` and `stream.drop(over: s, up_to: n)` now treat a negative `n` as `0` instead of panicking with `count must be >= 0`. The lenient convention matches `gleam/list.take` and `gleam/list.drop`, so callers can hand the result of an arithmetic clamp directly to `take` / `drop` without first guarding against an off-by-one underflow. Callers that want the previous "reject and surface the bad value" behaviour can still reach for `take_checked` / `drop_checked`, which return `Error(NegativeCount(function: _, given: n))`. (#224)
+
 ## [0.17.0] - 2026-05-16
 
 ### Documentation

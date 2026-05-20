@@ -71,9 +71,13 @@ fn filter_pull(
 /// Yield at most the first `n` elements; `n == 0` yields the empty
 /// stream.
 ///
-/// `n` MUST be `>= 0`. A negative `n` is rejected at construction
-/// time with a panic per the `datastream` module-level
-/// invalid-argument policy.
+/// Negative `n` is treated as `0` (the empty stream, with the same
+/// eager-close semantics as `take(s, 0)`). This matches
+/// `gleam/list.take`'s lenient convention so callers can hand
+/// `take` an arithmetic result without first clamping it. If you
+/// want the previous "reject and surface the bad value" behaviour,
+/// reach for `take_checked`, which returns `Error(NegativeCount(...))`
+/// on negative input.
 ///
 /// Stops pulling upstream the moment the `n`th element has been
 /// emitted, and closes the upstream on that early exit. This is what
@@ -114,7 +118,7 @@ fn filter_pull(
 /// regardless of which branch the runtime took.
 pub fn take(over stream: Stream(a), up_to n: Int) -> Stream(a) {
   case n < 0 {
-    True -> panic as "datastream/stream.take: count must be >= 0"
+    True -> take_active(stream, 0)
     False -> take_active(stream, n)
   }
 }
@@ -140,9 +144,12 @@ fn take_active(stream: Stream(a), n: Int) -> Stream(a) {
 
 /// Discard the first `n` elements; `n == 0` is the identity.
 ///
-/// `n` MUST be `>= 0`. A negative `n` is rejected at construction
-/// time with a panic per the `datastream` module-level
-/// invalid-argument policy.
+/// Negative `n` is treated as `0` (identity stream, no upstream
+/// pulls, no close). This matches `gleam/list.drop`'s lenient
+/// convention so callers can hand `drop` an arithmetic result
+/// without first clamping it. If you want the previous "reject
+/// and surface the bad value" behaviour, reach for `drop_checked`,
+/// which returns `Error(NegativeCount(...))` on negative input.
 ///
 /// **Resource handling at `n == 0`** — identity semantics: no
 /// upstream pull, no close. Asymmetric with `take(s, 0)` (which
@@ -153,7 +160,7 @@ fn take_active(stream: Stream(a), n: Int) -> Stream(a) {
 /// and recommended practice.
 pub fn drop(over stream: Stream(a), up_to n: Int) -> Stream(a) {
   case n < 0 {
-    True -> panic as "datastream/stream.drop: count must be >= 0"
+    True -> drop_active(stream, 0)
     False -> drop_active(stream, n)
   }
 }
