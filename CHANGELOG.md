@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- The minimum Gleam version is now 1.14.0 (was 1.15.0). 1.14.0 builds and tests the package unchanged on both targets, and `gleam_stdlib` 1.0 already requires it. CI tests that floor alongside the latest Gleam 1.x.
+- `binary.length_prefixed` reads an 8-byte length prefix as two 32-bit halves. The result on Erlang is unchanged; on JavaScript this removes the compiler's truncation warning for a 64-bit integer segment.
+
 ## [0.18.0] - 2026-05-20
 
 ### Changed

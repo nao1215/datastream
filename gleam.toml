@@ -17,7 +17,7 @@ links = [
 # `datastream/binary`) MUST run on both. Target-specific extension
 # modules (`datastream/erlang/*`, `datastream/javascript/*`) are
 # guarded so each target only sees the surface meant for it.
-gleam = ">= 1.15.0"
+gleam = ">= 1.14.0"
 
 [dependencies]
 gleam_stdlib = ">= 0.44.0 and < 2.0.0"
