@@ -111,9 +111,7 @@ pub fn append_does_not_open_second_when_first_short_circuits_test() {
     )
   let panicking_second =
     source.resource(
-      open: fn() {
-        panic as "second resource opened despite take(2) early-exit"
-      },
+      open: fn() { panic as "second resource opened despite take(2) early-exit" },
       next: fn(_) { Done },
       close: fn(_) { Nil },
     )

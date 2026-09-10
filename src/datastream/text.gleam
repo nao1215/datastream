@@ -338,7 +338,9 @@ fn graphemes_pull(
 ///
 /// The decoder holds a small internal buffer for partial multi-byte
 /// codepoints; it never materialises the full input.
-pub fn utf8_decode(over stream: Stream(BitArray)) -> Stream(Result(String, Nil)) {
+pub fn utf8_decode(
+  over stream: Stream(BitArray),
+) -> Stream(Result(String, Nil)) {
   utf8_decode_active(stream, <<>>, False)
 }
 

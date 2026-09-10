@@ -309,7 +309,10 @@ fn build_sample_stream(state: SampleState(a), ms: Int) -> Stream(a) {
 }
 
 @target(erlang)
-fn sample_step(state: SampleState(a), ms: Int) -> datastream.Step(a, Stream(a)) {
+fn sample_step(
+  state: SampleState(a),
+  ms: Int,
+) -> datastream.Step(a, Stream(a)) {
   case state.upstream_done {
     True -> Done
     False -> sample_wait(state, ms)
@@ -317,7 +320,10 @@ fn sample_step(state: SampleState(a), ms: Int) -> datastream.Step(a, Stream(a)) 
 }
 
 @target(erlang)
-fn sample_wait(state: SampleState(a), ms: Int) -> datastream.Step(a, Stream(a)) {
+fn sample_wait(
+  state: SampleState(a),
+  ms: Int,
+) -> datastream.Step(a, Stream(a)) {
   let deadline = state.window_start + ms
   let wait = ms_until(deadline)
   case process.receive(from: state.result_subj, within: wait) {

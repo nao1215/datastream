@@ -2,7 +2,7 @@
 
 ## Development setup
 
-- Gleam 1.15+
+- Gleam 1.14+ (`.mise.toml` pins the version CI uses for formatting)
 - Erlang/OTP 28+
 - Node.js 22+ (required for the JavaScript-target test run)
 - [just](https://github.com/casey/just) (task runner)
