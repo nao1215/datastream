@@ -363,7 +363,9 @@ fn read_prefix(buffer: BitArray, size: Int) -> Int {
     1, <<n:size(8), _:bits>> -> n
     2, <<n:size(16), _:bits>> -> n
     4, <<n:size(32), _:bits>> -> n
-    8, <<n:size(64), _:bits>> -> n
+    // Two 32-bit halves: a single 64-bit integer segment is truncated on
+    // the JavaScript target. The result on Erlang is identical.
+    8, <<high:size(32), low:size(32), _:bits>> -> high * 4_294_967_296 + low
     _, _ -> 0
   }
 }

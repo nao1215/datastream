@@ -380,7 +380,10 @@ fn filter_map_pull(
 /// convention followed by `source.resource`). Custom streams built
 /// with `make` must release resources inside `next` on the `Done`
 /// path if they hold any.
-pub fn flat_map(over stream: Stream(a), with f: fn(a) -> Stream(b)) -> Stream(b) {
+pub fn flat_map(
+  over stream: Stream(a),
+  with f: fn(a) -> Stream(b),
+) -> Stream(b) {
   flat_map_outer(stream, f)
 }
 
@@ -594,7 +597,11 @@ fn intersperse_awaiting_sep(stream: Stream(a), separator: a) -> Stream(a) {
   )
 }
 
-fn intersperse_pending(pending: a, stream: Stream(a), separator: a) -> Stream(a) {
+fn intersperse_pending(
+  pending: a,
+  stream: Stream(a),
+  separator: a,
+) -> Stream(a) {
   datastream.make(
     pull: fn() { Next(pending, intersperse_awaiting_sep(stream, separator)) },
     close: fn() { datastream.close(stream) },

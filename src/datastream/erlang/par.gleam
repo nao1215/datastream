@@ -539,7 +539,9 @@ fn map_ordered_step(state: MapOrdered(a, b)) -> datastream.Step(b, Stream(b)) {
 }
 
 @target(erlang)
-fn map_ordered_receive(state: MapOrdered(a, b)) -> datastream.Step(b, Stream(b)) {
+fn map_ordered_receive(
+  state: MapOrdered(a, b),
+) -> datastream.Step(b, Stream(b)) {
   let selector =
     process.new_selector()
     |> process.select_map(state.result_subject, fn(msg) { Ok(msg) })
@@ -673,7 +675,10 @@ pub fn each_ordered_with_checked(
 @target(erlang)
 /// Side-effect-only variant of `map_unordered`. Uses
 /// `default_max_workers` and `default_max_buffer`.
-pub fn each_unordered(over stream: Stream(a), with effect: fn(a) -> Nil) -> Nil {
+pub fn each_unordered(
+  over stream: Stream(a),
+  with effect: fn(a) -> Nil,
+) -> Nil {
   each_unordered_with(
     over: stream,
     with: effect,
@@ -814,7 +819,10 @@ pub fn merge_with_checked(
 }
 
 @target(erlang)
-fn merge_with_unchecked(streams: List(Stream(a)), max_buffer: Int) -> Stream(a) {
+fn merge_with_unchecked(
+  streams: List(Stream(a)),
+  max_buffer: Int,
+) -> Stream(a) {
   let result_subj = process.new_subject()
   let coordinator_pid = process.self()
   let all_signals =

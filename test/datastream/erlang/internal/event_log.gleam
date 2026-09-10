@@ -129,7 +129,12 @@ pub fn peak_concurrent(events: List(Event), named name: String) -> Int {
 }
 
 @target(erlang)
-fn peak_loop(events: List(Event), name: String, running: Int, peak: Int) -> Int {
+fn peak_loop(
+  events: List(Event),
+  name: String,
+  running: Int,
+  peak: Int,
+) -> Int {
   case events {
     [] -> peak
     [EnterFn(n), ..rest] if n == name -> {
@@ -140,8 +145,7 @@ fn peak_loop(events: List(Event), name: String, running: Int, peak: Int) -> Int 
       }
       peak_loop(rest, name, new_running, new_peak)
     }
-    [LeaveFn(n), ..rest] if n == name ->
-      peak_loop(rest, name, running - 1, peak)
+    [LeaveFn(n), ..rest] if n == name -> peak_loop(rest, name, running - 1, peak)
     [_, ..rest] -> peak_loop(rest, name, running, peak)
   }
 }

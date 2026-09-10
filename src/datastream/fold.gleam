@@ -183,7 +183,10 @@ pub fn drain(stream: Stream(a)) -> Nil {
 /// Returns `True` on an empty stream and short-circuits on the first
 /// `False`, so `all` terminates on infinite sources whose first failure
 /// is reachable.
-pub fn all(over stream: Stream(a), satisfying predicate: fn(a) -> Bool) -> Bool {
+pub fn all(
+  over stream: Stream(a),
+  satisfying predicate: fn(a) -> Bool,
+) -> Bool {
   case datastream.pull(stream) {
     Done -> True
     Next(element, rest) ->
@@ -202,7 +205,10 @@ pub fn all(over stream: Stream(a), satisfying predicate: fn(a) -> Bool) -> Bool 
 /// Returns `False` on an empty stream and short-circuits on the first
 /// `True`, so `any` terminates on infinite sources whose first match is
 /// reachable.
-pub fn any(over stream: Stream(a), satisfying predicate: fn(a) -> Bool) -> Bool {
+pub fn any(
+  over stream: Stream(a),
+  satisfying predicate: fn(a) -> Bool,
+) -> Bool {
   case datastream.pull(stream) {
     Done -> False
     Next(element, rest) ->

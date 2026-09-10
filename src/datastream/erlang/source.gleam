@@ -151,7 +151,10 @@ pub fn interval(every period_ms: Int) -> Stream(Nil) {
 /// be composed with `from_subject`: a `Subject` can only be received
 /// by its owning process, so the worker would `panic`. Wrap subject
 /// streams with their own application-level timeout instead.
-pub fn timeout(over stream: Stream(a), within ms: Int) -> Stream(Result(a, Nil)) {
+pub fn timeout(
+  over stream: Stream(a),
+  within ms: Int,
+) -> Stream(Result(a, Nil)) {
   build_timeout_stream(TimeoutActive(stream), ms)
 }
 
@@ -205,7 +208,10 @@ fn timeout_pull(
 }
 
 @target(erlang)
-fn pull_with_deadline(stream: Stream(a), ms: Int) -> Result(TimeoutPull(a), Nil) {
+fn pull_with_deadline(
+  stream: Stream(a),
+  ms: Int,
+) -> Result(TimeoutPull(a), Nil) {
   let result_subject = process.new_subject()
   let _pid =
     process.spawn_unlinked(fn() {

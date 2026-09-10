@@ -203,14 +203,20 @@ pub fn drain(stream: Stream(a)) -> Nil {
 /// Return `True` when every element satisfies `predicate`; `True` for
 /// an empty stream. Short-circuits on the first `False`. Re-exported
 /// from `datastream/fold.all`.
-pub fn all(over stream: Stream(a), satisfying predicate: fn(a) -> Bool) -> Bool {
+pub fn all(
+  over stream: Stream(a),
+  satisfying predicate: fn(a) -> Bool,
+) -> Bool {
   fold.all(over: stream, satisfying: predicate)
 }
 
 /// Return `True` when at least one element satisfies `predicate`;
 /// `False` for an empty stream. Short-circuits on the first `True`.
 /// Re-exported from `datastream/fold.any`.
-pub fn any(over stream: Stream(a), satisfying predicate: fn(a) -> Bool) -> Bool {
+pub fn any(
+  over stream: Stream(a),
+  satisfying predicate: fn(a) -> Bool,
+) -> Bool {
   fold.any(over: stream, satisfying: predicate)
 }
 
