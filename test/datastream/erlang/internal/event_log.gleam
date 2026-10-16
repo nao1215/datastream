@@ -10,7 +10,8 @@
 //// test process; the test drains it after the pipeline is done.
 
 @target(javascript)
-pub const beam_only_marker: String = "test/datastream/erlang/internal/event_log is BEAM-only"
+pub const beam_only_marker: String =
+  "test/datastream/erlang/internal/event_log is BEAM-only"
 
 @target(erlang)
 import datastream.{type Stream, Done, Next}

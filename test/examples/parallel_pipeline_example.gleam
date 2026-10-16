@@ -33,7 +33,8 @@ pub fn main() -> Nil {
 @target(javascript)
 /// Empty placeholder so the test module compiles cleanly on
 /// JavaScript even though every test inside is BEAM-only.
-pub const beam_only_marker: String = "examples/parallel_pipeline_example is BEAM-only"
+pub const beam_only_marker: String =
+  "examples/parallel_pipeline_example is BEAM-only"
 
 @target(erlang)
 /// Run the example pipeline against an in-memory list of inputs and

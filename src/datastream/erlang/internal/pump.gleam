@@ -13,7 +13,8 @@
 
 @target(javascript)
 /// Sentinel value documenting that this module is BEAM-only.
-pub const beam_only_marker: String = "datastream/erlang/internal/pump is BEAM-only"
+pub const beam_only_marker: String =
+  "datastream/erlang/internal/pump is BEAM-only"
 
 @target(erlang)
 import datastream.{type Stream, Done, Next}
