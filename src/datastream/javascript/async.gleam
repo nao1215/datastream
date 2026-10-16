@@ -23,7 +23,8 @@
 
 @target(erlang)
 /// Sentinel value documenting that this module is JavaScript-only.
-pub const javascript_only_marker: String = "datastream/javascript/async is JavaScript-only"
+pub const javascript_only_marker: String =
+  "datastream/javascript/async is JavaScript-only"
 
 @target(javascript)
 import datastream.{type Stream, Done, Next}

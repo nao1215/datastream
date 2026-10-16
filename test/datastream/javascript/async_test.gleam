@@ -2,7 +2,8 @@
 
 @target(erlang)
 /// Empty placeholder so this module compiles cleanly on Erlang.
-pub const javascript_only_marker: String = "datastream/javascript/async_test is JavaScript-only"
+pub const javascript_only_marker: String =
+  "datastream/javascript/async_test is JavaScript-only"
 
 @target(javascript)
 import datastream.{Done, Next}
