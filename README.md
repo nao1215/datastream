@@ -364,14 +364,17 @@ Use these versions or newer when combining `datastream` with a web stack:
 
 ## Verifying releases
 
-Each GitHub Release attaches the package tarball (`datastream-<version>.tar`), `checksums.txt`, a cosign signature bundle for it (`checksums.txt.sigstore.json`) and the build provenance (`datastream-<version>.intoto.jsonl`). Download them from the release page, then verify:
+Each GitHub Release attaches the Hex package tarball (`datastream-<version>.tar`),
+`checksums.txt`, a cosign signature bundle (`checksums.txt.sigstore.json`) and
+build provenance (`datastream-<version>.intoto.jsonl`). Download the assets, then:
 
 ```sh
 gh attestation verify datastream-<version>.tar --repo nao1215/datastream
 
-sha256sum -c checksums.txt
-cosign verify-blob --bundle checksums.txt.sigstore.json \
-  --certificate-identity-regexp '^https://github.com/nao1215/datastream/' \
+cosign verify-blob \
+  --bundle checksums.txt.sigstore.json \
+  --certificate-identity-regexp '^https://github\.com/nao1215/datastream/\.github/workflows/release\.yml@refs/tags/v' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   checksums.txt
+sha256sum --check checksums.txt
 ```
