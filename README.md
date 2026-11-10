@@ -361,3 +361,17 @@ Use these versions or newer when combining `datastream` with a web stack:
 | `wisp` | `>= 2.0.0` |
 | `mist` | `>= 6.0.0` |
 | `gleam_httpc` | `>= 5.0.0` |
+
+## Verifying releases
+
+Each GitHub Release attaches the package tarball (`datastream-<version>.tar`), `checksums.txt`, a cosign signature bundle for it (`checksums.txt.sigstore.json`) and the build provenance (`datastream-<version>.intoto.jsonl`). Download them from the release page, then verify:
+
+```sh
+gh attestation verify datastream-<version>.tar --repo nao1215/datastream
+
+sha256sum -c checksums.txt
+cosign verify-blob --bundle checksums.txt.sigstore.json \
+  --certificate-identity-regexp '^https://github.com/nao1215/datastream/' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  checksums.txt
+```
