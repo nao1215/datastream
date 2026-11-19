@@ -355,11 +355,15 @@ fn split_last(graphemes: List(String)) -> #(List(String), String) {
 /// Decode a stream of UTF-8 byte chunks into a stream of decoded
 /// strings, reassembling multi-byte codepoints split across chunks.
 ///
-/// Each successfully decoded codepoint surfaces as `Ok(string)`. An
-/// invalid byte (lead byte that is not a valid UTF-8 start, or a
-/// missing/invalid continuation) emits exactly one `Error(Nil)` and
-/// decoding resumes from the next byte. An incomplete trailing
-/// sequence at end-of-stream emits a final `Error(Nil)` before halting.
+/// Each run of valid UTF-8 that the decoder has buffered surfaces as
+/// one `Ok(string)`, so how the decoded text is divided into elements
+/// follows the chunk boundaries; the concatenated text does not. An
+/// invalid byte (a byte that cannot start a sequence, or a missing or
+/// out-of-range continuation, including overlong encodings, encoded
+/// surrogates and code points above U+10FFFF) emits exactly one
+/// `Error(Nil)`, and decoding resumes at the byte that broke the
+/// sequence. An incomplete trailing sequence at end-of-stream emits a
+/// final `Error(Nil)` before halting.
 ///
 /// The decoder holds a small internal buffer for partial multi-byte
 /// codepoints; it never materialises the full input.
@@ -507,7 +511,7 @@ fn consume_continuation(
         False -> DecodeNeedMore
       }
     <<b:size(8), more:bits>> ->
-      case b >= 0x80 && b < 0xC0 {
+      case is_continuation(lead, bit_array.byte_size(collected), b) {
         True ->
           collect_continuation(
             lead,
@@ -520,6 +524,22 @@ fn consume_continuation(
       }
     _ -> DecodeInvalid(rest)
   }
+}
+
+/// Whether `b` may follow `lead` after `seen` continuation bytes.
+/// Every continuation byte is in 0x80..0xBF, and the byte right after
+/// the lead is narrower for four leads (RFC 3629, section 4): 0xE0 and
+/// 0xF0 exclude overlong encodings, 0xED excludes the UTF-16 surrogates
+/// U+D800..U+DFFF and 0xF4 excludes code points above U+10FFFF.
+fn is_continuation(lead: Int, seen: Int, b: Int) -> Bool {
+  let #(low, high) = case seen, lead {
+    0, 0xE0 -> #(0xA0, 0xBF)
+    0, 0xED -> #(0x80, 0x9F)
+    0, 0xF0 -> #(0x90, 0xBF)
+    0, 0xF4 -> #(0x80, 0x8F)
+    _, _ -> #(0x80, 0xBF)
+  }
+  b >= low && b <= high
 }
 
 /// Decode a stream of UTF-8 byte chunks into a stream of decoded
