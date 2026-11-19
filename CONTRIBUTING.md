@@ -3,7 +3,7 @@
 ## Development setup
 
 - Gleam 1.14+ (`.mise.toml` pins the version CI uses for formatting)
-- Erlang/OTP 28+
+- Erlang/OTP 27+ (CI tests 27 and 29)
 - Node.js 22+ (required for the JavaScript-target test run)
 - [just](https://github.com/casey/just) (task runner)
 - [mise](https://mise.jdx.dev/) (recommended; the repository ships with `.mise.toml`)
