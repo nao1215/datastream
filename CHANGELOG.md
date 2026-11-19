@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 - GitHub Releases now attach the package tarball, `checksums.txt`, its cosign signature (`checksums.txt.sigstore.json`) and build provenance (`.intoto.jsonl`). See "Verifying releases" in the README.
 
+### Fixed
+
+- `text.split(over: s, on: "")` no longer splits a grapheme cluster that spans a chunk boundary. A combining mark, the `\n` of `\r\n`, the second half of a flag or the rest of an emoji sequence that arrived in the next chunk used to be emitted as a separate element; the result now matches `string.to_graphemes` of the whole input wherever the chunks are cut.
+
 ## [0.19.0] - 2026-09-10
 
 ### Changed
