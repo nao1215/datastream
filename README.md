@@ -366,6 +366,15 @@ Use these versions or newer when combining `datastream` with a web stack:
 | `mist` | `>= 6.0.0` |
 | `gleam_httpc` | `>= 5.0.0` |
 
+## Testing
+
+| Technique | Bug class caught here |
+|---|---|
+| Examples and unit tests | [Wrong elements, resource leaks, broken argument checks](doc/testing.md#examples-and-unit-tests) |
+| Generated properties | [Operators that disagree with gleam/list and gleam/string](doc/testing.md#generated-properties) |
+| Metamorphic relations | [Parsers whose output depends on where the input was cut into chunks](doc/testing.md#metamorphic-relations) |
+| Mutation testing | [Assertions that miss a changed operator or branch](doc/testing.md#mutation-testing) |
+
 ## Verifying releases
 
 Each GitHub Release attaches the Hex package tarball (`datastream-<version>.tar`),

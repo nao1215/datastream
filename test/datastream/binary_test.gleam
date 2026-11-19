@@ -381,3 +381,39 @@ pub fn length_prefixed_default_allows_normal_frames_test() {
   |> fold.to_list
   |> should.equal([Ok(<<65, 66, 67>>)])
 }
+
+// --- boundaries found by mutation testing ---------------------------------
+
+pub fn length_prefixed_accepts_a_frame_of_exactly_max_frame_size_test() {
+  from_list([<<3, 1, 2, 3>>])
+  |> binary.length_prefixed_with(prefix_size: 1, max_frame_size: 3)
+  |> fold.to_list
+  |> should.equal([Ok(<<1, 2, 3>>)])
+}
+
+pub fn length_prefixed_reads_two_frames_from_one_chunk_test() {
+  from_list([<<2, 1, 2, 1, 3>>])
+  |> binary.length_prefixed(prefix_size: 1)
+  |> fold.to_list
+  |> should.equal([Ok(<<1, 2>>), Ok(<<3>>)])
+}
+
+pub fn fixed_size_one_yields_every_byte_test() {
+  from_list([<<1, 2>>, <<3>>])
+  |> binary.fixed_size(size: 1)
+  |> fold.to_list
+  |> should.equal([<<1>>, <<2>>, <<3>>])
+}
+
+pub fn fixed_size_checked_accepts_one_test() {
+  let assert Ok(s) =
+    binary.fixed_size_checked(over: from_list([<<1, 2>>]), size: 1)
+  s |> fold.to_list |> should.equal([<<1>>, <<2>>])
+}
+
+pub fn delimited_keeps_the_empty_frame_after_a_trailing_delimiter_test() {
+  from_list([<<1, 10>>])
+  |> binary.delimited(on: <<10>>)
+  |> fold.to_list
+  |> should.equal([<<1>>, <<>>])
+}

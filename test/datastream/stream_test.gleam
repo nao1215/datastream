@@ -853,6 +853,66 @@ pub fn group_adjacent_does_not_merge_non_adjacent_duplicates_test() {
   |> should.equal([#(1, [1]), #(2, [2]), #(1, [1])])
 }
 
+// --- smallest valid arguments (found by mutation testing) ------------------
+
+pub fn drop_checked_zero_is_identity_test() {
+  let assert Ok(s) = stream.drop_checked(over: from_list([1, 2, 3]), up_to: 0)
+  fold.to_list(s) |> should.equal([1, 2, 3])
+}
+
+pub fn buffer_checked_accepts_a_capacity_of_one_test() {
+  let assert Ok(s) =
+    stream.buffer_checked(over: from_list([1, 2, 3]), prefetch: 1)
+  fold.to_list(s) |> should.equal([1, 2, 3])
+}
+
+pub fn chunks_of_one_wraps_every_element_test() {
+  from_list([1, 2, 3])
+  |> stream.chunks_of(into: 1)
+  |> fold.to_list
+  |> list.map(chunk.to_list)
+  |> should.equal([[1], [2], [3]])
+}
+
+pub fn chunks_of_checked_accepts_one_test() {
+  let assert Ok(s) = stream.chunks_of_checked(over: from_list([1, 2]), into: 1)
+  s |> fold.to_list |> list.map(chunk.to_list) |> should.equal([[1], [2]])
+}
+
+pub fn broadcast_bounded_into_one_returns_one_consumer_test() {
+  let assert [only] =
+    stream.broadcast_bounded(over: from_list([1, 2]), into: 1, max_queue: 1)
+  fold.to_list(only) |> should.equal([1, 2])
+}
+
+pub fn broadcast_bounded_allows_a_queue_of_exactly_max_queue_test() {
+  // Draining `a` first leaves both elements queued for `b`: a queue of
+  // exactly `max_queue` is within the bound.
+  let assert [a, b] =
+    stream.broadcast_bounded(over: from_list([1, 2]), into: 2, max_queue: 2)
+  fold.to_list(a) |> should.equal([1, 2])
+  fold.to_list(b) |> should.equal([1, 2])
+}
+
+pub fn broadcast_bounded_accepts_a_max_queue_of_one_test() {
+  let assert [a, b] =
+    stream.broadcast_bounded(over: from_list([1, 2]), into: 2, max_queue: 1)
+  // Alternate the consumers so neither falls behind by more than one.
+  let assert Next(1, a) = datastream.pull(a)
+  let assert Next(1, b) = datastream.pull(b)
+  let assert Next(2, a) = datastream.pull(a)
+  let assert Next(2, b) = datastream.pull(b)
+  let assert Done = datastream.pull(a)
+  let assert Done = datastream.pull(b)
+}
+
+pub fn broadcast_three_consumers_each_see_every_element_test() {
+  let assert [a, b, c] = stream.broadcast(over: from_list([1, 2, 3]), into: 3)
+  fold.to_list(c) |> should.equal([1, 2, 3])
+  fold.to_list(a) |> should.equal([1, 2, 3])
+  fold.to_list(b) |> should.equal([1, 2, 3])
+}
+
 // --- construction-time panics (Erlang target) ----------------------------
 //
 // `take`, `drop`, and `chunks_of` reject nonsensical count / size
