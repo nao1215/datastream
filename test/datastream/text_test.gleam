@@ -1,6 +1,9 @@
 import datastream.{Done, Next}
 import datastream/fold
+import datastream/source
 import datastream/text
+import gleam/list
+import gleam/string
 import gleeunit
 import gleeunit/should
 
@@ -251,6 +254,48 @@ pub fn split_empty_delimiter_handles_multibyte_grapheme_test() {
   |> text.split(on: "")
   |> fold.to_list
   |> should.equal(["a", "👍", "b"])
+}
+
+pub fn split_empty_delimiter_joins_combining_mark_across_chunks_test() {
+  // "e" followed by U+0301 COMBINING ACUTE ACCENT is one grapheme even
+  // when the read boundary falls between them.
+  from_list(["ae", "\u{0301}b"])
+  |> text.split(on: "")
+  |> fold.to_list
+  |> should.equal(["a", "e\u{0301}", "b"])
+}
+
+pub fn split_empty_delimiter_joins_crlf_across_chunks_test() {
+  from_list(["a\r", "\nb"])
+  |> text.split(on: "")
+  |> fold.to_list
+  |> should.equal(["a", "\r\n", "b"])
+}
+
+pub fn split_empty_delimiter_joins_flag_across_three_chunks_test() {
+  // A flag is two regional indicators; a lone indicator in the middle
+  // chunk must wait for its pair.
+  from_list(["a\u{1F1EF}", "\u{1F1F5}\u{1F1FA}", "\u{1F1F8}", ""])
+  |> text.split(on: "")
+  |> fold.to_list
+  |> should.equal(["a", "\u{1F1EF}\u{1F1F5}", "\u{1F1FA}\u{1F1F8}"])
+}
+
+pub fn split_empty_delimiter_matches_whole_input_for_every_cut_test() {
+  let input = "x👍🏽e\u{0301}\r\n\u{1F1EF}\u{1F1F5}y"
+  let codepoints =
+    string.to_utf_codepoints(input)
+    |> list.map(fn(cp) { string.from_utf_codepoints([cp]) })
+  let expected = string.to_graphemes(input)
+  source.range(from: 0, to: list.length(codepoints) + 1)
+  |> fold.to_list
+  |> list.each(fn(cut) {
+    let #(left, right) = list.split(codepoints, cut)
+    from_list([string.concat(left), string.concat(right)])
+    |> text.split(on: "")
+    |> fold.to_list
+    |> should.equal(expected)
+  })
 }
 
 // --- utf8_decode ----------------------------------------------------------

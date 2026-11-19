@@ -240,7 +240,11 @@ fn finish_records(
 ///
 /// `delimiter == ""` triggers the grapheme-cluster splitter: each
 /// emitted element is exactly one Unicode grapheme cluster of the
-/// input, in source order.
+/// input, in source order. A grapheme that spans a chunk boundary
+/// (a combining mark, `\r\n`, a flag or an emoji sequence split by the
+/// read) is still emitted as one element: the last grapheme of each
+/// chunk is held back until the next chunk or end-of-stream shows
+/// whether it continues.
 ///
 /// Chunk-boundary handling: pieces that span a chunk boundary are
 /// joined; the trailing in-flight piece is held in a small buffer and
@@ -250,7 +254,7 @@ pub fn split(
   on delimiter: String,
 ) -> Stream(String) {
   case delimiter {
-    "" -> graphemes_active(stream, [], False)
+    "" -> graphemes_active(stream, [], "", False)
     _ -> split_active(stream, "", delimiter, False)
   }
 }
@@ -293,13 +297,18 @@ fn split_drained() -> Stream(String) {
   datastream.make(pull: fn() { Done }, close: fn() { Nil })
 }
 
+/// `pending` holds the complete graphemes of the chunks read so far;
+/// `tail` is the last grapheme seen, which the next chunk may still
+/// extend (a combining mark, the `\n` of `\r\n`, the second regional
+/// indicator of a flag), so it is re-segmented together with that chunk.
 fn graphemes_active(
   source: Stream(String),
   pending: List(String),
+  tail: String,
   source_drained: Bool,
 ) -> Stream(String) {
   datastream.make(
-    pull: fn() { graphemes_pull(source, pending, source_drained) },
+    pull: fn() { graphemes_pull(source, pending, tail, source_drained) },
     close: fn() { maybe_close(source, source_drained) },
   )
 }
@@ -307,21 +316,37 @@ fn graphemes_active(
 fn graphemes_pull(
   source: Stream(String),
   pending: List(String),
+  tail: String,
   source_drained: Bool,
 ) -> Step(String, Stream(String)) {
   case pending {
     [grapheme, ..rest] ->
-      Next(grapheme, graphemes_active(source, rest, source_drained))
+      Next(grapheme, graphemes_active(source, rest, tail, source_drained))
     [] ->
       case source_drained {
         True -> Done
         False ->
           case datastream.pull(source) {
-            Done -> Done
-            Next(chunk, source_rest) ->
-              graphemes_pull(source_rest, string.to_graphemes(chunk), False)
+            Done ->
+              case tail {
+                "" -> Done
+                _ -> Next(tail, graphemes_active(source, [], "", True))
+              }
+            Next(chunk, source_rest) -> {
+              let #(complete, new_tail) =
+                split_last(string.to_graphemes(tail <> chunk))
+              graphemes_pull(source_rest, complete, new_tail, False)
+            }
           }
       }
+  }
+}
+
+/// Split off the last element; an empty list yields `#([], "")`.
+fn split_last(graphemes: List(String)) -> #(List(String), String) {
+  case list.reverse(graphemes) {
+    [] -> #([], "")
+    [last, ..rest_rev] -> #(list.reverse(rest_rev), last)
   }
 }
 
