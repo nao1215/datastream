@@ -714,6 +714,61 @@ pub fn each_ordered_with_checked_rejects_buffer_below_workers_test() {
   b |> should.equal(1)
 }
 
+// --- smallest valid arguments (found by mutation testing) ------------------
+
+@target(erlang)
+pub fn map_ordered_with_checked_accepts_one_worker_and_equal_buffer_test() {
+  let assert Ok(s) =
+    par.map_ordered_with_checked(
+      over: source.from_list([1, 2, 3]),
+      with: fn(x) { x * 10 },
+      max_workers: 1,
+      max_buffer: 1,
+    )
+  fold.to_list(s) |> should.equal([10, 20, 30])
+}
+
+@target(erlang)
+pub fn map_unordered_with_checked_accepts_buffer_equal_to_workers_test() {
+  let assert Ok(s) =
+    par.map_unordered_with_checked(
+      over: source.from_list([1, 2, 3]),
+      with: fn(x) { x * 10 },
+      max_workers: 2,
+      max_buffer: 2,
+    )
+  fold.to_list(s) |> list.sort(by: int_compare) |> should.equal([10, 20, 30])
+}
+
+@target(erlang)
+pub fn map_ordered_with_accepts_one_worker_and_equal_buffer_test() {
+  par.map_ordered_with(
+    over: source.from_list([1, 2]),
+    with: fn(x) { x + 1 },
+    max_workers: 1,
+    max_buffer: 1,
+  )
+  |> fold.to_list
+  |> should.equal([2, 3])
+}
+
+@target(erlang)
+pub fn merge_with_checked_accepts_a_buffer_of_one_test() {
+  let assert Ok(s) =
+    par.merge_with_checked(
+      streams: [source.from_list([1]), source.from_list([2])],
+      max_buffer: 1,
+    )
+  fold.to_list(s) |> list.sort(by: int_compare) |> should.equal([1, 2])
+}
+
+@target(erlang)
+pub fn merge_with_accepts_a_buffer_of_one_test() {
+  par.merge_with(streams: [source.from_list([1, 2])], max_buffer: 1)
+  |> fold.to_list
+  |> should.equal([1, 2])
+}
+
 @target(erlang)
 fn collect_three(subj: process.Subject(Int), acc: List(Int)) -> List(Int) {
   case list.length(acc) >= 3 {

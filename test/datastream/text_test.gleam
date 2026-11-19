@@ -473,6 +473,23 @@ pub fn utf8_decode_accepts_the_edges_of_each_lead_range_test() {
   ])
 }
 
+pub fn utf8_decode_accepts_the_smallest_two_byte_lead_test() {
+  // 0xC2 0xA9 is "©"; 0xC2 is the first valid 2-byte lead.
+  from_list([<<0xC2, 0xA9>>])
+  |> text.utf8_decode
+  |> fold.to_list
+  |> should.equal([Ok("©")])
+}
+
+pub fn utf8_decode_rejects_0xf5_as_a_lead_byte_test() {
+  // 0xF5 and above can never start a sequence, so each byte here is
+  // its own error instead of one truncated four-byte sequence.
+  from_list([<<0xF5, 0x80>>])
+  |> text.utf8_decode
+  |> fold.to_list
+  |> should.equal([Error(Nil), Error(Nil)])
+}
+
 pub fn utf8_decode_lossy_keeps_text_around_an_encoded_surrogate_test() {
   from_list([<<"hello":utf8, 0xED, 0xA0, 0x80, "world":utf8>>])
   |> text.utf8_decode_lossy
