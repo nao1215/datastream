@@ -407,6 +407,79 @@ pub fn utf8_decode_rejects_consecutive_lone_continuation_bytes_test() {
   |> should.equal([Error(Nil), Error(Nil)])
 }
 
+pub fn utf8_decode_keeps_text_around_an_encoded_surrogate_test() {
+  // 0xED 0xA0 0x80 has the shape of a 3-byte sequence but encodes the
+  // surrogate U+D800, which UTF-8 forbids (RFC 3629): after 0xED the
+  // next byte must be in 0x80..0x9F. Each of the three bytes is one
+  // error and the text on both sides survives.
+  from_list([<<"hello":utf8, 0xED, 0xA0, 0x80, "world":utf8>>])
+  |> text.utf8_decode
+  |> fold.to_list
+  |> should.equal([Ok("hello"), Error(Nil), Error(Nil), Error(Nil), Ok("world")])
+}
+
+pub fn utf8_decode_rejects_overlong_three_byte_sequence_test() {
+  // 0xE0 0x80 0xAF is an overlong encoding of "/" (U+002F); after 0xE0
+  // the next byte must be in 0xA0..0xBF.
+  from_list([<<"a":utf8, 0xE0, 0x80, 0xAF, "b":utf8>>])
+  |> text.utf8_decode
+  |> fold.to_list
+  |> should.equal([Ok("a"), Error(Nil), Error(Nil), Error(Nil), Ok("b")])
+}
+
+pub fn utf8_decode_rejects_overlong_four_byte_sequence_test() {
+  // After 0xF0 the next byte must be in 0x90..0xBF.
+  from_list([<<"a":utf8, 0xF0, 0x8F, 0xBF, 0xBF, "b":utf8>>])
+  |> text.utf8_decode
+  |> fold.to_list
+  |> should.equal([
+    Ok("a"),
+    Error(Nil),
+    Error(Nil),
+    Error(Nil),
+    Error(Nil),
+    Ok("b"),
+  ])
+}
+
+pub fn utf8_decode_rejects_codepoint_above_u10ffff_test() {
+  // 0xF4 0x90 0x80 0x80 would be U+110000; after 0xF4 the next byte
+  // must be in 0x80..0x8F.
+  from_list([<<"a":utf8, 0xF4, 0x90, 0x80, 0x80, "b":utf8>>])
+  |> text.utf8_decode
+  |> fold.to_list
+  |> should.equal([
+    Ok("a"),
+    Error(Nil),
+    Error(Nil),
+    Error(Nil),
+    Error(Nil),
+    Ok("b"),
+  ])
+}
+
+pub fn utf8_decode_accepts_the_edges_of_each_lead_range_test() {
+  // U+0800, U+D7FF, U+E000, U+10000 and U+10FFFF are the first or last
+  // code points next to each restricted second-byte range.
+  from_list([
+    <<0xE0, 0xA0, 0x80, 0xED, 0x9F, 0xBF, 0xEE, 0x80, 0x80>>,
+    <<0xF0, 0x90, 0x80, 0x80, 0xF4, 0x8F, 0xBF, 0xBF>>,
+  ])
+  |> text.utf8_decode
+  |> fold.to_list
+  |> should.equal([
+    Ok("\u{0800}\u{D7FF}\u{E000}"),
+    Ok("\u{10000}\u{10FFFF}"),
+  ])
+}
+
+pub fn utf8_decode_lossy_keeps_text_around_an_encoded_surrogate_test() {
+  from_list([<<"hello":utf8, 0xED, 0xA0, 0x80, "world":utf8>>])
+  |> text.utf8_decode_lossy
+  |> fold.to_string
+  |> should.equal("helloworld")
+}
+
 // --- utf8_decode_lossy ----------------------------------------------------
 
 pub fn utf8_decode_lossy_simple_ascii_test() {

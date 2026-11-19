@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 ### Fixed
 
 - `text.split(over: s, on: "")` no longer splits a grapheme cluster that spans a chunk boundary. A combining mark, the `\n` of `\r\n`, the second half of a flag or the rest of an emoji sequence that arrived in the next chunk used to be emitted as a separate element; the result now matches `string.to_graphemes` of the whole input wherever the chunks are cut.
+- `text.utf8_decode` and `text.utf8_decode_lossy` no longer lose valid text next to an encoded surrogate (`0xED 0xA0..0xBF`), an overlong 3- or 4-byte sequence (`0xE0 0x80..0x9F`, `0xF0 0x80..0x8F`) or a code point above U+10FFFF (`0xF4 0x90..`). Such a sequence passed the structural check, and the whole buffered run around it, valid text included, became a single `Error(Nil)` (the lossy variant dropped it silently). Each byte of the invalid sequence is now one `Error(Nil)` and the text on both sides is decoded. The `utf8_decode` documentation now also says that a run of valid bytes is emitted as one `Ok`, as the implementation and tests always did.
 
 ## [0.19.0] - 2026-09-10
 
