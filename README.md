@@ -12,10 +12,14 @@
 
 datastream is a pull-based stream library for Gleam.
 
-A `Stream(a)` is a pipeline definition, not a materialized collection.
-Each terminal operation runs the source again from the beginning, so the
-library fits work that should stay lazy, repeatable, and explicit about
-effects.
+A `Stream(a)` describes a pipeline. Nothing runs until a terminal
+operation pulls from it, and each terminal operation runs the source again
+from the beginning.
+
+Use it when the input is too large to load at once, when the pipeline
+owns a file handle, socket, or cursor, when the data arrives as chunked
+text or bytes, or when you need bounded parallel or time-based operators on
+Erlang. If the whole input is already in memory, `gleam/list` is enough.
 
 ## Install
 
@@ -24,24 +28,6 @@ gleam add datastream
 ```
 
 API reference: <https://hexdocs.pm/datastream>
-
-## When to use it
-
-Use `datastream` when you need one or more of these:
-
-- the input is large or unbounded and should not be loaded all at once
-- the pipeline owns a real resource such as a file handle, socket, or cursor
-- the work is naturally chunked text or bytes
-- the Erlang target needs bounded parallel work or time-based stream operators
-
-For a hands-on tour, jump to the runnable
-[Log-ingest example](#log-ingest-example-bytes--lines--per-level-counts)
-or the [NDJSON example](#ndjson-example-chunked-bytes--typed-records).
-The full catalog of compile-checked end-to-end pipelines lives under
-[Example pipelines](#example-pipelines).
-
-Stay with `gleam/list` when the whole input is already in memory and you
-do not need lazy pulls, replayable pipelines, or deterministic cleanup.
 
 ## Quick start
 
@@ -65,11 +51,9 @@ pub fn main() {
 
 ## Log-ingest example: bytes -> lines -> per-level counts
 
-A common shape: bytes arrive in arbitrary chunks (file, socket), the
-pipeline reassembles them into lines, drops malformed rows, and produces
-per-level counts in a single pass. `text.lines` owns the line buffering,
-so the chunk boundaries shown below never split a record across two
-emitted strings.
+Chunks from a file or socket are split into lines, malformed rows are
+dropped, and levels are counted in one pass. `text.lines` buffers partial
+lines, so a record cut across two chunks still comes out as one string.
 
 ```gleam
 import datastream/fold
@@ -122,16 +106,14 @@ fn bump(acc: dict.Dict(Level, Int), level: Level) -> dict.Dict(Level, Int) {
 }
 ```
 
-Production callers swap `source.from_list(chunks)` for a
-`source.resource` over a real file handle or socket — the rest of the
-pipeline is unchanged. Full source:
+With a real file or socket, replace `source.from_list(chunks)` with
+`source.resource`; the rest of the pipeline stays the same. Full source:
 [`test/examples/log_pipeline_example.gleam`](https://github.com/nao1215/datastream/blob/main/test/examples/log_pipeline_example.gleam).
 
 ## NDJSON example: chunked bytes -> typed records
 
-Newline-delimited JSON (one record per line) over a chunked byte source.
-The same lazy pass does UTF-8 decode, line framing, and per-record
-parsing without holding the whole payload in memory.
+One lazy pass decodes UTF-8, splits lines, and parses each record without
+holding the whole payload in memory.
 
 ```gleam
 import datastream/fold
@@ -185,17 +167,15 @@ fn parse_record(line: String) -> Result(Record, ParseError) {
 }
 ```
 
-`fold.collect_result` short-circuits at the first parse failure; swap in
-`fold.partition_result` to surface every successful record alongside
-every error. Drop in your JSON decoder of choice at `parse_record`.
-Full source:
+`fold.collect_result` stops at the first parse failure. `fold.partition_result`
+returns all successes and all errors instead. Put your JSON decoder in
+`parse_record`. Full source:
 [`test/examples/ndjson_pipeline_example.gleam`](https://github.com/nao1215/datastream/blob/main/test/examples/ndjson_pipeline_example.gleam).
 
 ## Resource-backed streams
 
-`source.resource` opens lazily on the first pull, yields values one by
-one, and closes exactly once on normal completion and on the early-stop
-paths the library controls.
+`source.resource` opens on the first pull and closes exactly once, both
+when the source finishes and when the library stops early (here, `take`).
 
 ```gleam
 import datastream.{Done, Next}
@@ -230,18 +210,12 @@ the failure on the typed path as `Result`.
 
 ## JavaScript async I/O
 
-The core `Stream(a)` stays synchronous on both targets. That is a
-deliberate design choice: each pull either returns the next element
-immediately or reports `Done`.
-
-Because of that, the official JavaScript boundary is:
-
-- async input stays in host JavaScript until it has been reduced to a bounded value or batch, then enters `datastream` through `source.once`, `source.from_list`, `source.from_bit_array`, or a resource constructor
-- synchronous `Stream(a)` pipelines leave `datastream` through `datastream/javascript/async.to_async_iterable`
-
-This means `datastream` does not pretend that a host-side
-`AsyncIterable` is the same thing as a pure `Stream(a)`. The adapter is
-honest about where `await` lives.
+`Stream(a)` is synchronous on both targets: each pull returns the next
+element or `Done` right away. On JavaScript, await async input in host code
+first, then pass the bounded value or batch in through `source.once`,
+`source.from_list`, `source.from_bit_array`, or a resource constructor. To
+hand a pipeline back to host code, use
+`datastream/javascript/async.to_async_iterable`.
 
 Gleam:
 
@@ -274,9 +248,7 @@ so resource-backed pipelines still release handles promptly.
 
 ## Example pipelines
 
-Compile-checked examples live under `test/examples/` and run in CI. The
-log-ingest and NDJSON entries are inlined above; the rest are linked
-straight to source.
+These run in CI from `test/examples/`.
 
 | Example | Shape |
 | --- | --- |
@@ -291,8 +263,8 @@ straight to source.
 - `datastream`: defines `Stream(a)` and `Step(a, state)`
 - `datastream/source`: constructors for list-backed, generated, and resource-backed streams
 - `datastream/stream`: lazy combinators such as `map`, `filter`, `flat_map`, `zip`, `take`, and `chunks_of`
-- `datastream/sink`: every terminal — pure reductions (`to_list`, `count`, `fold`, `first`, `find`, `collect_result`, …) and side-effecting consumers (`each`, `try_each`, `println`)
-- `datastream/fold`: legacy alias for the pure-reduction subset of `sink`. Re-exports the same functions for backward compatibility; new code should reach for `datastream/sink` instead
+- `datastream/sink`: all terminals, both pure reductions (`to_list`, `count`, `fold`, `first`, `find`, `collect_result`, ...) and side-effecting consumers (`each`, `try_each`, `println`)
+- `datastream/fold`: legacy alias for the pure reductions in `sink`; use `datastream/sink` in new code
 - `datastream/chunk`: opaque finite batches
 - `datastream/text`: chunk-aware UTF-8 decode and line splitting
 - `datastream/binary`: byte and framing helpers
@@ -310,12 +282,9 @@ straight to source.
 
 ## Checked constructors
 
-Some constructors reject invalid numeric arguments at construction time.
-Use the panicking variants when the value is a trusted constant in your
-own code. Use the matching `*_checked` variant when the value comes from
-CLI flags, config files, request parameters, or any other dynamic input.
-
-The main checked families are:
+Constructors panic on invalid numeric arguments such as a negative `take`.
+When the value comes from user input or config, use the `*_checked`
+variant, which returns a `Result`:
 
 - `stream.take_checked`, `stream.drop_checked`
 - `stream.buffer_checked`, `stream.chunks_of_checked`
@@ -324,33 +293,9 @@ The main checked families are:
 
 ## Backpressure
 
-Two combinators interact with backpressure between a producer and one
-or more consumers:
-
-- **`stream.buffer(stream, prefetch:)`** prefetches up to `prefetch`
-  elements ahead of the consumer, so a latency-bound upstream (HTTP body
-  bytes, slow disk reads) does not serialise the consumer's per-element
-  work. The buffer is bounded by `prefetch`; a slow consumer cannot
-  blow it past that capacity.
-- **`stream.broadcast(stream, n)`** fans one source out to `n`
-  independent consumers, each pulling at its own pace. Per-consumer
-  queues are **unbounded**: if one consumer pulls aggressively while
-  another pauses, the slow consumer's queue grows by the per-consumer
-  pull-distance. The worst-case memory footprint is
-  `O(max_pull_distance × n)`. For cardinality-unbounded sources
-  (`source.iterate`, `source.repeat`) this is a silent memory hazard.
-- **`stream.broadcast_bounded(stream, n, max_queue:)`** is the
-  bounded variant: any consumer queue exceeding `max_queue` triggers
-  a structured panic on the next upstream pull. Use it in production
-  fan-outs (HTTP multicast, websocket pub/sub, Kafka producer tees,
-  ...) where a stalled slow consumer must surface as a crash instead
-  of an OOM.
-
-If you only have one consumer and just want to overlap producer work
-with consumer work, reach for `buffer`. If you genuinely need fan-out
-to multiple consumers and your source is bounded, `broadcast` is fine.
-If the source is unbounded or production-critical, default to
-`broadcast_bounded`.
+- `stream.buffer(stream, prefetch:)` reads up to `prefetch` elements ahead of one consumer.
+- `stream.broadcast(stream, n)` fans out to `n` consumers with unbounded per-consumer queues. A stalled consumer on an unbounded source (`source.iterate`, `source.repeat`) grows memory without limit.
+- `stream.broadcast_bounded(stream, n, max_queue:)` panics when a queue exceeds `max_queue`, so a stalled consumer crashes instead of running out of memory. Prefer it for unbounded or production fan-outs.
 
 ## Web framework compatibility
 
@@ -358,7 +303,7 @@ If the source is unbounded or production-critical, default to
 `gleam_stdlib >= 0.44.0`. Older releases of some web packages pin
 `gleam_erlang < 1.0.0`, which conflicts with `datastream`.
 
-Use these versions or newer when combining `datastream` with a web stack:
+Use at least these versions with a web stack:
 
 | Package | Minimum compatible version |
 | --- | --- |
