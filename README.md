@@ -35,7 +35,6 @@ API reference: <https://hexdocs.pm/datastream>
 import datastream/sink
 import datastream/source
 import datastream/stream
-import gleam/io
 
 pub fn main() {
   let result =
@@ -44,7 +43,7 @@ pub fn main() {
     |> stream.take(up_to: 5)
     |> sink.to_list
 
-  io.debug(result)
+  echo result
   // [2, 4, 6, 8, 10]
 }
 ```
@@ -61,7 +60,6 @@ import datastream/source
 import datastream/stream
 import datastream/text
 import gleam/dict
-import gleam/io
 import gleam/option.{type Option, None, Some}
 import gleam/string
 
@@ -72,8 +70,8 @@ pub type Level {
 }
 
 pub fn main() {
-  // Real-world input arrives in arbitrary chunks. Note how `WARN` and
-  // `INFO` records straddle chunk boundaries — `text.lines` reassembles.
+  // Input arrives in arbitrary chunks. The `WARN` and `INFO` records
+  // straddle chunk boundaries and `text.lines` reassembles them.
   let chunks = [
     "INFO  user_id=42 logged in\nWARN  ", "user_id=42 retry\nERROR ",
     "user_id=99 timeout\nbogus line with no level\nINFO ",
@@ -84,7 +82,7 @@ pub fn main() {
   |> text.lines
   |> stream.filter_map(with: parse_line)
   |> fold.fold(from: dict.new(), with: bump)
-  |> io.debug
+  |> echo
   // dict.from_list([#(Info, 2), #(Warn, 1), #(LogError, 1)])
 }
 
@@ -121,7 +119,6 @@ import datastream/source
 import datastream/stream
 import datastream/text
 import gleam/int
-import gleam/io
 import gleam/string
 
 pub type Record {
@@ -147,7 +144,7 @@ pub fn main() {
   |> text.lines
   |> stream.map(with: parse_record)
   |> fold.collect_result
-  |> io.debug
+  |> echo
   // Ok([Record(1, "first record"), Record(2, "second record"), ...])
 }
 
@@ -182,7 +179,6 @@ import datastream.{Done, Next}
 import datastream/fold
 import datastream/source
 import datastream/stream
-import gleam/io
 
 pub fn main() {
   let numbers =
@@ -200,7 +196,7 @@ pub fn main() {
   numbers
   |> stream.take(up_to: 2)
   |> fold.to_list
-  |> io.debug
+  |> echo
   // [1, 2]
 }
 ```
