@@ -23,6 +23,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - `binary.fixed_size`, `length_prefixed`, `delimited`, `text.split` and `text.utf8_decode` build frames in linear time when data arrives in many small chunks.
 - `stream.broadcast`, `broadcast_bounded`, `unzip` and `stream.buffer` keep their queues in linear time, and `broadcast` and `unzip` free their state once every consumer is done.
 - `erlang/par.map_*` no longer take the caller's own `DOWN` messages, no longer hang when one worker crashes next to a fast result, and no longer leave results from an earlier run in the mailbox.
+- `erlang/par.map_*` and `each_*` stop their running workers when the process running the stream exits.
 - `erlang/source.timeout` pulls every element in one worker, so resources owned by that process survive between elements, and closes the upstream when the deadline passes.
 - The `erlang/time` combinators send one element per request instead of filling the caller's mailbox.
 - `datastream/erlang/internal/pump` is no longer published as a documented module.
