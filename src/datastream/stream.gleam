@@ -19,13 +19,10 @@
 
 import datastream.{type Step, type Stream, Done, Next}
 import datastream/chunk.{type Chunk}
+import datastream/internal/core
 import datastream/internal/ref.{type Ref}
 import gleam/list
 import gleam/option.{type Option, None, Some}
-
-fn noop() -> Nil {
-  Nil
-}
 
 // --- single-stream combinators ----------------------------------------------
 
@@ -168,11 +165,11 @@ pub fn drop(over stream: Stream(a), up_to n: Int) -> Stream(a) {
 /// Why a checked stream constructor refused its argument.
 ///
 /// Returned by `take_checked`, `drop_checked`, `buffer_checked`,
-/// `chunks_of_checked`, and any future non-panicking variant of a
-/// constructor that would otherwise reject its argument with a
-/// `panic`. Lets the caller surface argument-validation failures
-/// through `Result` instead of crashing the process — useful when
-/// the numeric argument comes from CLI flags, config files, or
+/// `chunks_of_checked`, and any future checked variant of a
+/// constructor that would otherwise panic on its argument or, for
+/// `take` and `drop`, treat a negative count as `0`. Lets the caller
+/// surface argument-validation failures through `Result` — useful
+/// when the numeric argument comes from CLI flags, config files, or
 /// request parameters.
 ///
 /// `function` names the constructor that rejected the value
@@ -189,8 +186,8 @@ pub type StreamArgError {
   NotPositive(function: String, given: Int)
 }
 
-/// Like `take`, but returns the argument-validation failure as a
-/// `Result` instead of panicking. Use this when `n` comes from
+/// Like `take`, but returns `Error` for a negative `n` instead of
+/// treating it as `0`. Use this when `n` comes from
 /// dynamic input (CLI, config, request parameters).
 ///
 /// On success the stream behaves identically to
@@ -215,8 +212,8 @@ pub fn take_checked(
   }
 }
 
-/// Like `drop`, but returns the argument-validation failure as a
-/// `Result` instead of panicking. Use this when `n` comes from
+/// Like `drop`, but returns `Error` for a negative `n` instead of
+/// treating it as `0`. Use this when `n` comes from
 /// dynamic input.
 ///
 /// On success the stream behaves identically to
@@ -384,47 +381,42 @@ pub fn flat_map(
   over stream: Stream(a),
   with f: fn(a) -> Stream(b),
 ) -> Stream(b) {
-  flat_map_outer(stream, f)
+  flat_map_active(None, stream, f)
 }
 
-fn flat_map_outer(outer: Stream(a), f: fn(a) -> Stream(b)) -> Stream(b) {
-  datastream.make(pull: fn() { flat_map_outer_pull(outer, f) }, close: fn() {
+fn flat_map_active(
+  inner: Option(Stream(b)),
+  outer: Stream(a),
+  f: fn(a) -> Stream(b),
+) -> Stream(b) {
+  datastream.make(pull: fn() { flat_map_pull(inner, outer, f) }, close: fn() {
+    case inner {
+      Some(inner) -> datastream.close(inner)
+      None -> Nil
+    }
     datastream.close(outer)
   })
 }
 
-fn flat_map_outer_pull(
+// One self-recursive loop over both streams, so the JavaScript target
+// runs it as a loop instead of growing the stack per empty inner.
+fn flat_map_pull(
+  inner: Option(Stream(b)),
   outer: Stream(a),
   f: fn(a) -> Stream(b),
 ) -> Step(b, Stream(b)) {
-  case datastream.pull(outer) {
-    Done -> Done
-    Next(element, outer_rest) -> flat_map_inner_pull(f(element), outer_rest, f)
-  }
-}
-
-fn flat_map_inner(
-  inner: Stream(b),
-  outer: Stream(a),
-  f: fn(a) -> Stream(b),
-) -> Stream(b) {
-  datastream.make(
-    pull: fn() { flat_map_inner_pull(inner, outer, f) },
-    close: fn() {
-      datastream.close(inner)
-      datastream.close(outer)
-    },
-  )
-}
-
-fn flat_map_inner_pull(
-  inner: Stream(b),
-  outer: Stream(a),
-  f: fn(a) -> Stream(b),
-) -> Step(b, Stream(b)) {
-  case datastream.pull(inner) {
-    Next(value, inner_rest) -> Next(value, flat_map_inner(inner_rest, outer, f))
-    Done -> flat_map_outer_pull(outer, f)
+  case inner {
+    Some(current) ->
+      case datastream.pull(current) {
+        Next(value, rest) -> Next(value, flat_map_active(Some(rest), outer, f))
+        Done -> flat_map_pull(None, outer, f)
+      }
+    None ->
+      case datastream.pull(outer) {
+        Done -> Done
+        Next(element, outer_rest) ->
+          flat_map_pull(Some(f(element)), outer_rest, f)
+      }
   }
 }
 
@@ -443,7 +435,7 @@ pub fn flatten(streams: Stream(Stream(a))) -> Stream(a) {
 /// next one is opened. On early exit, the active stream is closed.
 pub fn concat(streams: List(Stream(a))) -> Stream(a) {
   case streams {
-    [] -> empty_stream()
+    [] -> core.empty()
     [first, ..rest] -> concat_active(first, rest)
   }
 }
@@ -466,10 +458,6 @@ fn concat_pull(
         [next, ..rest] -> concat_pull(next, rest)
       }
   }
-}
-
-fn empty_stream() -> Stream(a) {
-  datastream.make(pull: fn() { Done }, close: noop)
 }
 
 /// Left-fold the stream, emitting one output per input.
@@ -669,9 +657,9 @@ fn dedupe_pull(stream: Stream(a), last: Option(a)) -> Step(a, Stream(a)) {
 /// good faith but resource cleanup wins over delivery, matching
 /// `take`'s behaviour.
 pub fn buffer(over stream: Stream(a), prefetch capacity: Int) -> Stream(a) {
-  case capacity < 1 {
-    True -> panic as "datastream/stream.buffer: capacity must be >= 1"
-    False -> buffer_active(stream, [], 0, capacity)
+  case buffer_checked(over: stream, prefetch: capacity) {
+    Ok(buffered) -> buffered
+    Error(_) -> panic as "datastream/stream.buffer: capacity must be >= 1"
   }
 }
 
@@ -692,49 +680,76 @@ pub fn buffer_checked(
 ) -> Result(Stream(a), StreamArgError) {
   case capacity < 1 {
     True -> Error(NotPositive(function: "buffer", given: capacity))
-    False -> Ok(buffer_active(stream, [], 0, capacity))
+    False -> Ok(new_buffer(stream, capacity))
   }
 }
 
-fn buffer_active(
-  stream: Stream(a),
-  buf: List(a),
-  count: Int,
-  capacity: Int,
-) -> Stream(a) {
-  datastream.make(
-    pull: fn() { buffer_pull(stream, buf, count, capacity) },
-    close: fn() { datastream.close(stream) },
+fn new_buffer(stream: Stream(a), capacity: Int) -> Stream(a) {
+  buffer_active(BufferState(
+    upstream: Some(stream),
+    front: [],
+    back: [],
+    count: 0,
+    capacity:,
+  ))
+}
+
+// The prefetched elements live in a two-list queue: `front` in pull
+// order and `back` in reverse, so pushing and popping are amortised
+// O(1). `upstream` becomes `None` once it returns `Done`, after which
+// it is neither pulled nor closed again.
+type BufferState(a) {
+  BufferState(
+    upstream: Option(Stream(a)),
+    front: List(a),
+    back: List(a),
+    count: Int,
+    capacity: Int,
   )
 }
 
-fn buffer_pull(
-  stream: Stream(a),
-  buf: List(a),
-  count: Int,
-  capacity: Int,
-) -> Step(a, Stream(a)) {
-  let #(buf, stream, count) = buffer_fill(stream, buf, count, capacity)
-  case buf {
+fn buffer_active(state: BufferState(a)) -> Stream(a) {
+  datastream.make(pull: fn() { buffer_pull(state) }, close: fn() {
+    case state.upstream {
+      Some(upstream) -> datastream.close(upstream)
+      None -> Nil
+    }
+  })
+}
+
+fn buffer_pull(state: BufferState(a)) -> Step(a, Stream(a)) {
+  let state = buffer_fill(state)
+  let #(front, back) = case state.front {
+    [] -> #(list.reverse(state.back), [])
+    _ -> #(state.front, state.back)
+  }
+  case front {
     [] -> Done
-    [head, ..tail] ->
-      Next(head, buffer_active(stream, tail, count - 1, capacity))
+    [head, ..front] ->
+      Next(
+        head,
+        buffer_active(
+          BufferState(..state, front:, back:, count: state.count - 1),
+        ),
+      )
   }
 }
 
-fn buffer_fill(
-  stream: Stream(a),
-  buf: List(a),
-  count: Int,
-  capacity: Int,
-) -> #(List(a), Stream(a), Int) {
-  case count >= capacity {
-    True -> #(buf, stream, count)
-    False ->
-      case datastream.pull(stream) {
+fn buffer_fill(state: BufferState(a)) -> BufferState(a) {
+  case state.upstream, state.count >= state.capacity {
+    None, _ | _, True -> state
+    Some(upstream), False ->
+      case datastream.pull(upstream) {
         Next(element, rest) ->
-          buffer_fill(rest, list.append(buf, [element]), count + 1, capacity)
-        Done -> #(buf, stream, count)
+          buffer_fill(
+            BufferState(
+              ..state,
+              upstream: Some(rest),
+              back: [element, ..state.back],
+              count: state.count + 1,
+            ),
+          )
+        Done -> BufferState(..state, upstream: None)
       }
   }
 }
@@ -819,26 +834,27 @@ fn interrupt_pull_stream(
 
 // --- broadcast and unzip ----------------------------------------------------
 
-/// Internal state shared by every consumer returned from `broadcast`.
-///
-/// `upstream` is `None` once the source has signalled `Done` (or once
-/// every consumer has called `close` and we proactively closed the
-/// source). Each `queue` holds elements that the source has produced
-/// but the corresponding consumer has not yet pulled. `active` tracks
-/// which consumers are still alive — we stop enqueueing into a closed
-/// consumer's queue, and once every flag is `False` we close the
-/// upstream from the last close call.
+// State shared by every consumer returned from `broadcast`.
+//
+// `upstream` is `None` once the source has returned `Done` or has been
+// closed because every consumer closed. Each consumer has its own
+// queue of elements the source produced but that consumer has not
+// pulled yet. Once no consumer is active the state is deleted from its
+// `Ref`, so a finished broadcast holds no memory.
 type BroadcastState(a) {
   BroadcastState(
     upstream: Option(Stream(a)),
-    queues: List(List(a)),
-    active: List(Bool),
-    /// `None` for `broadcast` (unbounded queues). `Some(k)` for
-    /// `broadcast_bounded`, where any consumer queue exceeding `k`
-    /// elements triggers a structured panic on the next upstream
-    /// pull.
+    consumers: List(Consumer(a)),
+    // `None` for `broadcast`; `Some(k)` for `broadcast_bounded`, which
+    // panics once a queue would hold more than `k` elements.
     max_queue: Option(Int),
   )
+}
+
+// A consumer's queue as two lists, `front` in pull order and `back`
+// reversed, so both ends are amortised O(1); `size` counts both.
+type Consumer(a) {
+  Consumer(front: List(a), back: List(a), size: Int, active: Bool)
 }
 
 /// Split `stream` into `n` independent consumer streams that share a
@@ -882,30 +898,20 @@ type BroadcastState(a) {
 /// reference (`datastream/internal/ref`). On Erlang the cell is a
 /// process-dictionary slot; on JavaScript it is a one-field mutable
 /// object. No `gleam_erlang` processes are spawned; no shared global
-/// state. The `Ref(_)` is local to each `broadcast` call.
+/// state. The `Ref(_)` is local to each `broadcast` call and is freed
+/// once every consumer has returned `Done` or been closed.
+///
+/// **Limitation:** on Erlang every consumer must be pulled in the
+/// process that called `broadcast`. Pulling one from another process,
+/// for example by handing it to `par.merge`, a `time` combinator or
+/// `source.timeout`, panics.
 ///
 /// **Close contract:** every consumer's `close` is recorded; the
 /// upstream is closed exactly once, on whichever call brings the
 /// active-consumer count to zero. If the upstream returns `Done`
 /// first it self-closes, and the close callbacks are no-ops.
 pub fn broadcast(over stream: Stream(a), into n: Int) -> List(Stream(a)) {
-  case n < 1 {
-    True -> {
-      datastream.close(stream)
-      []
-    }
-    False -> {
-      let initial =
-        BroadcastState(
-          upstream: Some(stream),
-          queues: list.repeat([], times: n),
-          active: list.repeat(True, times: n),
-          max_queue: None,
-        )
-      let state_ref = ref.new(initial)
-      build_consumers(state_ref, n, [])
-    }
-  }
+  start_broadcast(stream, n, None)
 }
 
 /// Like `broadcast`, but each per-consumer queue is capped at
@@ -925,7 +931,7 @@ pub fn broadcast(over stream: Stream(a), into n: Int) -> List(Stream(a)) {
 ///
 /// Behaviour on success is identical to `broadcast(s, n)` until the
 /// queue bound is hit. Until then there is no overhead beyond a
-/// per-pull `list.length` check on the freshly-enqueued queues.
+/// per-pull comparison of each queue's length counter.
 ///
 /// **What "exceeded" means.** The check fires *after* the producing
 /// pull has already enqueued the element to every still-alive
@@ -943,43 +949,35 @@ pub fn broadcast_bounded(
   into n: Int,
   max_queue max_queue: Int,
 ) -> List(Stream(a)) {
+  case n >= 1 && max_queue < 1 {
+    True ->
+      panic as "datastream/stream.broadcast_bounded: max_queue must be >= 1"
+    False -> start_broadcast(stream, n, Some(max_queue))
+  }
+}
+
+fn start_broadcast(
+  stream: Stream(a),
+  n: Int,
+  max_queue: Option(Int),
+) -> List(Stream(a)) {
   case n < 1 {
     True -> {
       datastream.close(stream)
       []
     }
-    False ->
-      case max_queue < 1 {
-        True ->
-          panic as "datastream/stream.broadcast_bounded: max_queue must be >= 1"
-        False -> {
-          let initial =
-            BroadcastState(
-              upstream: Some(stream),
-              queues: list.repeat([], times: n),
-              active: list.repeat(True, times: n),
-              max_queue: Some(max_queue),
-            )
-          let state_ref = ref.new(initial)
-          build_consumers(state_ref, n, [])
-        }
-      }
-  }
-}
-
-fn build_consumers(
-  state_ref: Ref(BroadcastState(a)),
-  remaining: Int,
-  acc: List(Stream(a)),
-) -> List(Stream(a)) {
-  case remaining {
-    0 -> acc
-    _ -> {
-      let consumer_id = remaining - 1
-      build_consumers(state_ref, consumer_id, [
-        broadcast_consumer(state_ref, consumer_id),
-        ..acc
-      ])
+    False -> {
+      let empty_queue = Consumer(front: [], back: [], size: 0, active: True)
+      let state_ref =
+        ref.new(BroadcastState(
+          upstream: Some(stream),
+          consumers: list.repeat(empty_queue, times: n),
+          max_queue:,
+        ))
+      list.repeat(Nil, times: n)
+      |> list.index_map(fn(_, consumer_id) {
+        broadcast_consumer(state_ref, consumer_id)
+      })
     }
   }
 }
@@ -990,7 +988,7 @@ fn broadcast_consumer(
 ) -> Stream(a) {
   datastream.make(
     pull: fn() { broadcast_pull(state_ref, consumer_id) },
-    close: fn() { broadcast_close(state_ref, consumer_id) },
+    close: fn() { broadcast_finish(state_ref, consumer_id) },
   )
 }
 
@@ -998,180 +996,130 @@ fn broadcast_pull(
   state_ref: Ref(BroadcastState(a)),
   consumer_id: Int,
 ) -> Step(a, Stream(a)) {
-  let state = ref.get(state_ref)
-  case list_at(state.queues, consumer_id) {
-    [head, ..tail] -> {
-      let new_queues = list_replace_at(state.queues, consumer_id, tail)
-      ref.set(
-        state_ref,
-        BroadcastState(
-          upstream: state.upstream,
-          queues: new_queues,
-          active: state.active,
-          max_queue: state.max_queue,
-        ),
-      )
-      Next(head, broadcast_consumer(state_ref, consumer_id))
-    }
-    [] ->
-      case state.upstream {
-        None -> Done
-        Some(upstream) ->
+  case ref.get(state_ref) {
+    // Every consumer already finished; this one has nothing left.
+    Error(_) -> Done
+    Ok(state) ->
+      case pop_queued(state.consumers, consumer_id), state.upstream {
+        Ok(#(element, consumers)), _ -> {
+          ref.set(state_ref, BroadcastState(..state, consumers:))
+          Next(element, broadcast_consumer(state_ref, consumer_id))
+        }
+        Error(_), None -> {
+          broadcast_finish(state_ref, consumer_id)
+          Done
+        }
+        Error(_), Some(upstream) ->
           case datastream.pull(upstream) {
             Done -> {
-              ref.set(
-                state_ref,
-                BroadcastState(
-                  upstream: None,
-                  queues: state.queues,
-                  active: state.active,
-                  max_queue: state.max_queue,
-                ),
-              )
+              ref.set(state_ref, BroadcastState(..state, upstream: None))
+              broadcast_finish(state_ref, consumer_id)
               Done
             }
-            Next(element, rest) ->
-              broadcast_emit_and_fan_out(
+            Next(element, rest) -> {
+              let consumers =
+                enqueue_for_others(state.consumers, consumer_id, element)
+              check_queue_bound(consumers, state.max_queue)
+              ref.set(
                 state_ref,
-                consumer_id,
-                state,
-                element,
-                rest,
+                BroadcastState(..state, upstream: Some(rest), consumers:),
               )
+              Next(element, broadcast_consumer(state_ref, consumer_id))
+            }
           }
       }
   }
 }
 
-fn broadcast_close(state_ref: Ref(BroadcastState(a)), consumer_id: Int) -> Nil {
-  let state = ref.get(state_ref)
-  let new_active = list_replace_at(state.active, consumer_id, False)
-  let any_active = list.any(new_active, fn(b) { b })
-  let cleared_queue = list_replace_at(state.queues, consumer_id, [])
-  case any_active, state.upstream {
-    True, _ ->
-      ref.set(
-        state_ref,
-        BroadcastState(
-          upstream: state.upstream,
-          queues: cleared_queue,
-          active: new_active,
-          max_queue: state.max_queue,
-        ),
-      )
-    False, Some(upstream) -> {
-      datastream.close(upstream)
-      ref.set(
-        state_ref,
-        BroadcastState(
-          upstream: None,
-          queues: cleared_queue,
-          active: new_active,
-          max_queue: state.max_queue,
-        ),
-      )
-    }
-    False, None ->
-      ref.set(
-        state_ref,
-        BroadcastState(
-          upstream: None,
-          queues: cleared_queue,
-          active: new_active,
-          max_queue: state.max_queue,
-        ),
-      )
-  }
-}
-
-/// Fan a freshly-pulled element out to other consumers, enforce the
-/// optional `max_queue` bound, persist the new state, and yield the
-/// element to the puller. Extracted from `broadcast_pull` to keep
-/// nesting shallow.
-fn broadcast_emit_and_fan_out(
+// Marks a consumer as done, by `Done` or by `close`. The last one
+// closes the upstream if it is still open and deletes the shared state.
+fn broadcast_finish(
   state_ref: Ref(BroadcastState(a)),
   consumer_id: Int,
-  state: BroadcastState(a),
-  element: a,
-  rest: Stream(a),
-) -> Step(a, Stream(a)) {
-  let new_queues =
-    fanout_to_others(state.queues, state.active, consumer_id, element)
-  maybe_assert_queue_bound(new_queues, state.max_queue)
-  ref.set(
-    state_ref,
-    BroadcastState(
-      upstream: Some(rest),
-      queues: new_queues,
-      active: state.active,
-      max_queue: state.max_queue,
-    ),
-  )
-  Next(element, broadcast_consumer(state_ref, consumer_id))
-}
-
-/// `broadcast` (unbounded) passes `None` and short-circuits;
-/// `broadcast_bounded` passes `Some(k)` and walks the post-fanout
-/// queues, panicking on overflow.
-fn maybe_assert_queue_bound(
-  queues: List(List(a)),
-  max_queue: Option(Int),
 ) -> Nil {
-  case max_queue {
-    None -> Nil
-    Some(limit) -> assert_queue_bound(queues, limit)
-  }
-}
-
-/// Walk every consumer queue in the post-fanout state and panic if
-/// any of them now exceeds the bound. Called only by
-/// `broadcast_bounded`. The structured panic message is the public
-/// signal that a slow consumer has stalled the pipeline beyond the
-/// caller's tolerated buffer size.
-fn assert_queue_bound(queues: List(List(a)), max: Int) -> Nil {
-  case list.find(queues, fn(q) { list.length(q) > max }) {
-    Ok(_) ->
-      panic as "datastream/stream.broadcast_bounded: a consumer's queue exceeded max_queue (slow consumer stalling fast producer)"
+  case ref.get(state_ref) {
     Error(_) -> Nil
+    Ok(state) -> {
+      let consumers =
+        list.index_map(state.consumers, fn(consumer, index) {
+          case index == consumer_id {
+            True -> Consumer(front: [], back: [], size: 0, active: False)
+            False -> consumer
+          }
+        })
+      case
+        list.any(consumers, fn(consumer) { consumer.active }),
+        state.upstream
+      {
+        True, _ -> ref.set(state_ref, BroadcastState(..state, consumers:))
+        False, Some(upstream) -> {
+          ref.delete(state_ref)
+          datastream.close(upstream)
+        }
+        False, None -> ref.delete(state_ref)
+      }
+    }
   }
 }
 
-fn fanout_to_others(
-  queues: List(List(a)),
-  active: List(Bool),
-  skip_id: Int,
+fn pop_queued(
+  consumers: List(Consumer(a)),
+  consumer_id: Int,
+) -> Result(#(a, List(Consumer(a))), Nil) {
+  case consumers, consumer_id {
+    [], _ -> Error(Nil)
+    [consumer, ..rest], 0 -> {
+      let #(front, back) = case consumer.front {
+        [] -> #(list.reverse(consumer.back), [])
+        front -> #(front, consumer.back)
+      }
+      case front {
+        [element, ..front] -> {
+          let consumer =
+            Consumer(..consumer, front:, back:, size: consumer.size - 1)
+          Ok(#(element, [consumer, ..rest]))
+        }
+        [] -> Error(Nil)
+      }
+    }
+    [consumer, ..rest], _ ->
+      case pop_queued(rest, consumer_id - 1) {
+        Ok(#(element, rest)) -> Ok(#(element, [consumer, ..rest]))
+        Error(_) -> Error(Nil)
+      }
+  }
+}
+
+fn enqueue_for_others(
+  consumers: List(Consumer(a)),
+  puller_id: Int,
   element: a,
-) -> List(List(a)) {
-  list.index_map(queues, fn(queue, index) {
-    case index == skip_id, list_at_bool(active, index) {
-      True, _ -> queue
-      False, False -> queue
-      False, True -> list.append(queue, [element])
+) -> List(Consumer(a)) {
+  list.index_map(consumers, fn(consumer, index) {
+    case index != puller_id && consumer.active {
+      True ->
+        Consumer(
+          ..consumer,
+          back: [element, ..consumer.back],
+          size: consumer.size + 1,
+        )
+      False -> consumer
     }
   })
 }
 
-fn list_at(xs: List(List(a)), index: Int) -> List(a) {
-  case xs, index {
-    [], _ -> []
-    [head, ..], 0 -> head
-    [_, ..rest], _ -> list_at(rest, index - 1)
-  }
-}
-
-fn list_at_bool(xs: List(Bool), index: Int) -> Bool {
-  case xs, index {
-    [], _ -> False
-    [head, ..], 0 -> head
-    [_, ..rest], _ -> list_at_bool(rest, index - 1)
-  }
-}
-
-fn list_replace_at(xs: List(b), index: Int, value: b) -> List(b) {
-  case xs, index {
-    [], _ -> []
-    [_, ..rest], 0 -> [value, ..rest]
-    [head, ..rest], _ -> [head, ..list_replace_at(rest, index - 1, value)]
+fn check_queue_bound(
+  consumers: List(Consumer(a)),
+  max_queue: Option(Int),
+) -> Nil {
+  case max_queue {
+    Some(limit) ->
+      case list.any(consumers, fn(consumer) { consumer.size > limit }) {
+        True ->
+          panic as "datastream/stream.broadcast_bounded: a consumer's queue exceeded max_queue (slow consumer stalling fast producer)"
+        False -> Nil
+      }
+    None -> Nil
   }
 }
 
@@ -1184,7 +1132,9 @@ fn list_replace_at(xs: List(b), index: Int, value: b) -> List(b) {
 /// via `broadcast` under the hood.
 ///
 /// **Cross-target:** same FFI-backed shared state as `broadcast`,
-/// so `unzip` runs on both Erlang and JavaScript.
+/// so `unzip` runs on both Erlang and JavaScript, with the same
+/// limitation: on Erlang both halves must be pulled in the process that
+/// called `unzip`.
 ///
 /// **Buffer size:** unbounded per consumer, inherited from
 /// `broadcast`. A pipeline that drives one half of the unzipped pair
@@ -1212,9 +1162,9 @@ pub fn unzip(stream: Stream(#(a, b))) -> #(Stream(a), Stream(b)) {
 /// The trailing chunk may be smaller than `size` when the source
 /// length is not divisible.
 pub fn chunks_of(over stream: Stream(a), into size: Int) -> Stream(Chunk(a)) {
-  case size < 1 {
-    True -> panic as "datastream/stream.chunks_of: size must be >= 1"
-    False -> chunks_active(stream, [], 0, size)
+  case chunks_of_checked(over: stream, into: size) {
+    Ok(chunked) -> chunked
+    Error(_) -> panic as "datastream/stream.chunks_of: size must be >= 1"
   }
 }
 
@@ -1260,7 +1210,7 @@ fn chunks_pull(
     Done ->
       case buffer {
         [] -> Done
-        _ -> Next(chunk.from_list(list.reverse(buffer)), empty_stream())
+        _ -> Next(chunk.from_list(list.reverse(buffer)), core.empty())
       }
     Next(element, rest) -> {
       let new_count = count + 1
@@ -1304,38 +1254,23 @@ fn group_pull(
   key: fn(a) -> k,
 ) -> Step(#(k, Chunk(a)), Stream(#(k, Chunk(a)))) {
   case datastream.pull(source) {
-    Done -> group_flush(current_key, buffer)
-    Next(element, rest) ->
-      group_advance(current_key, buffer, element, rest, key)
-  }
-}
-
-fn group_flush(
-  current_key: Option(k),
-  buffer: List(a),
-) -> Step(#(k, Chunk(a)), Stream(#(k, Chunk(a)))) {
-  case current_key {
-    None -> Done
-    Some(k) -> Next(#(k, chunk.from_list(list.reverse(buffer))), empty_stream())
-  }
-}
-
-fn group_advance(
-  current_key: Option(k),
-  buffer: List(a),
-  element: a,
-  rest: Stream(a),
-  key: fn(a) -> k,
-) -> Step(#(k, Chunk(a)), Stream(#(k, Chunk(a)))) {
-  let element_key = key(element)
-  case current_key {
-    None -> group_pull(rest, Some(element_key), [element], key)
-    Some(prev_key) if prev_key == element_key ->
-      group_pull(rest, Some(element_key), [element, ..buffer], key)
-    Some(prev_key) ->
-      Next(
-        #(prev_key, chunk.from_list(list.reverse(buffer))),
-        group_active(rest, Some(element_key), [element], key),
-      )
+    Done ->
+      case current_key {
+        None -> Done
+        Some(k) ->
+          Next(#(k, chunk.from_list(list.reverse(buffer))), core.empty())
+      }
+    Next(element, rest) -> {
+      let element_key = key(element)
+      case current_key {
+        Some(prev_key) if prev_key != element_key ->
+          Next(
+            #(prev_key, chunk.from_list(list.reverse(buffer))),
+            group_active(rest, Some(element_key), [element], key),
+          )
+        Some(_) -> group_pull(rest, current_key, [element, ..buffer], key)
+        None -> group_pull(rest, Some(element_key), [element], key)
+      }
+    }
   }
 }

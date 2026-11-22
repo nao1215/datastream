@@ -49,16 +49,13 @@
 ////
 //// ## Notes
 ////
-//// - A `f(x)` that `panic`s terminates the stream with `Done`.
-////   The crashed worker is detected via `process.monitor`, so the
-////   pipeline does not deadlock.
-//// - `merge` workers poll for a coordinator-liveness signal every
-////   `merge_worker_liveness_check_ms` ms. If the caller of
-////   `merge` / `merge_with` drops the returned stream without
-////   reaching `close` (e.g. by losing a reference inside a
-////   long-running process), the workers stay resident: the caller is
-////   still alive, so the liveness probe says "keep going". Always
-////   drive the stream to a terminal or call `close` explicitly.
+//// - A `f(x)` that `panic`s, or a `merge` / `race` source that
+////   panics, closes the upstream, stops the other workers and
+////   re-raises the crash as a panic in the process pulling the stream.
+//// - `merge` and `race` workers exit and close their source when the
+////   process pulling the stream exits. If that process stays alive
+////   but drops the stream without reaching `close`, the workers stay
+////   resident. Always drive the stream to a terminal.
 //// - Unbounded concurrency is intentionally not offered.
 ////
 //// ## Limitation: incompatible with `from_subject`
@@ -70,9 +67,6 @@
 //// the worker would `panic` on the first pull. Wrap subject streams
 //// outside the parallel layer (e.g. materialise to a list first) or
 //// route them through a non-`par.*` pipeline.
-
-@target(erlang)
-const merge_worker_liveness_check_ms: Int = 5000
 
 @target(javascript)
 /// Sentinel value documenting that this module is BEAM-only.
@@ -92,7 +86,10 @@ pub const default_max_buffer: Int = 16
 import datastream.{type Stream, Done, Next}
 
 @target(erlang)
-import datastream/erlang/internal/pump.{type Stop}
+import datastream/erlang/internal/pump.{
+  type Mailbox, type Reply, type Worker, Element, Exhausted, Received, TimedOut,
+  WorkerDown,
+}
 
 @target(erlang)
 import datastream/fold
@@ -104,13 +101,16 @@ import datastream/source
 import gleam/dict.{type Dict}
 
 @target(erlang)
-import gleam/erlang/process.{type Subject}
+import gleam/erlang/process.{type Monitor, type Pid}
 
 @target(erlang)
 import gleam/list
 
 @target(erlang)
 import gleam/option.{type Option, None, Some}
+
+@target(erlang)
+import gleam/result
 
 // --- common argument validation --------------------------------------------
 
@@ -144,14 +144,16 @@ pub type ParArgError {
 }
 
 @target(erlang)
-fn validate_par_args(max_workers: Int, max_buffer: Int) -> Nil {
-  case max_workers >= 1 {
-    True -> Nil
-    False -> panic as "datastream/erlang/par: max_workers must be >= 1"
-  }
-  case max_buffer >= max_workers {
-    True -> Nil
-    False -> panic as "datastream/erlang/par: max_buffer must be >= max_workers"
+/// The panicking constructors are the checked ones plus this.
+fn or_panic(checked: Result(a, ParArgError)) -> a {
+  case checked {
+    Ok(value) -> value
+    Error(InvalidMaxWorkers(..)) ->
+      panic as "datastream/erlang/par: max_workers must be >= 1"
+    Error(BufferLessThanWorkers(..)) ->
+      panic as "datastream/erlang/par: max_buffer must be >= max_workers"
+    Error(InvalidMaxBuffer(..)) ->
+      panic as "datastream/erlang/par.merge: max_buffer must be >= 1"
   }
 }
 
@@ -177,14 +179,6 @@ fn check_par_args(
 }
 
 @target(erlang)
-fn validate_buffer(max_buffer: Int) -> Nil {
-  case max_buffer >= 1 {
-    True -> Nil
-    False -> panic as "datastream/erlang/par.merge: max_buffer must be >= 1"
-  }
-}
-
-@target(erlang)
 fn check_buffer(function: String, max_buffer: Int) -> Result(Nil, ParArgError) {
   case max_buffer >= 1 {
     True -> Ok(Nil)
@@ -192,18 +186,37 @@ fn check_buffer(function: String, max_buffer: Int) -> Result(Nil, ParArgError) {
   }
 }
 
-// --- map_unordered --------------------------------------------------------
+// --- map_unordered / map_ordered ---------------------------------------------
 
 @target(erlang)
-type MapUnordered(a, b) {
-  MapUnordered(
+/// Whether `map_*` emits results in input order or as they finish.
+type Order {
+  InputOrder
+  CompletionOrder
+}
+
+@target(erlang)
+type MapSettings(a, b) {
+  MapSettings(f: fn(a) -> b, max_workers: Int, max_buffer: Int, order: Order)
+}
+
+@target(erlang)
+/// One run of a `map_*` stream. `running` maps each busy worker's
+/// dispatch index to its process and monitor, `watching` maps the
+/// monitors back to the index, and `finished` holds results that wait
+/// for an earlier one under `InputOrder`.
+type MapRun(a, b) {
+  MapRun(
+    settings: MapSettings(a, b),
     source: Stream(a),
-    f: fn(a) -> b,
-    max_workers: Int,
-    max_buffer: Int,
-    workers_busy: Int,
-    result_subject: Subject(b),
     source_drained: Bool,
+    mailbox: Mailbox(#(Int, b)),
+    reaper: Pid,
+    running: Dict(Int, #(Pid, Monitor)),
+    watching: Dict(Monitor, Int),
+    finished: Dict(Int, b),
+    next_dispatch_index: Int,
+    next_emit_index: Int,
   )
 }
 
@@ -240,17 +253,8 @@ pub fn map_unordered_with(
   max_workers max_workers: Int,
   max_buffer max_buffer: Int,
 ) -> Stream(b) {
-  validate_par_args(max_workers, max_buffer)
-  let result_subject = process.new_subject()
-  build_map_unordered_stream(MapUnordered(
-    source: stream,
-    f: f,
-    max_workers: max_workers,
-    max_buffer: max_buffer,
-    workers_busy: 0,
-    result_subject: result_subject,
-    source_drained: False,
-  ))
+  map_unordered_with_checked(over: stream, with: f, max_workers:, max_buffer:)
+  |> or_panic
 }
 
 @target(erlang)
@@ -272,140 +276,14 @@ pub fn map_unordered_with_checked(
   max_workers max_workers: Int,
   max_buffer max_buffer: Int,
 ) -> Result(Stream(b), ParArgError) {
-  case check_par_args("map_unordered_with", max_workers, max_buffer) {
-    Error(e) -> Error(e)
-    Ok(Nil) -> {
-      let result_subject = process.new_subject()
-      Ok(
-        build_map_unordered_stream(MapUnordered(
-          source: stream,
-          f: f,
-          max_workers: max_workers,
-          max_buffer: max_buffer,
-          workers_busy: 0,
-          result_subject: result_subject,
-          source_drained: False,
-        )),
-      )
-    }
-  }
-}
-
-@target(erlang)
-fn build_map_unordered_stream(state: MapUnordered(a, b)) -> Stream(b) {
-  datastream.make(pull: fn() { map_unordered_step(state) }, close: fn() {
-    map_unordered_close(state)
-  })
-}
-
-@target(erlang)
-fn map_unordered_close(state: MapUnordered(a, b)) -> Nil {
-  case state.source_drained {
-    True -> Nil
-    False -> datastream.close(state.source)
-  }
-}
-
-@target(erlang)
-fn map_unordered_step(
-  state: MapUnordered(a, b),
-) -> datastream.Step(b, Stream(b)) {
-  let state = dispatch_unordered(state)
-  case state.workers_busy {
-    0 -> Done
-    _ -> {
-      map_unordered_receive(state)
-    }
-  }
-}
-
-@target(erlang)
-fn map_unordered_receive(
-  state: MapUnordered(a, b),
-) -> datastream.Step(b, Stream(b)) {
-  let selector =
-    process.new_selector()
-    |> process.select_map(state.result_subject, fn(msg) { Ok(msg) })
-    |> process.select_monitors(fn(down) {
-      case down {
-        process.ProcessDown(reason: process.Normal, ..) -> Error(False)
-        _ -> Error(True)
-      }
-    })
-  case process.selector_receive_forever(from: selector) {
-    Ok(result) ->
-      Next(
-        result,
-        build_map_unordered_stream(
-          MapUnordered(..state, workers_busy: state.workers_busy - 1),
-        ),
-      )
-    Error(True) ->
-      // Abnormal exit. The worker may have sent its result before
-      // crashing — check the subject with a brief timeout.
-      case process.receive(from: state.result_subject, within: 10) {
-        Ok(result) ->
-          Next(
-            result,
-            build_map_unordered_stream(
-              MapUnordered(..state, workers_busy: state.workers_busy - 1),
-            ),
-          )
-        Error(_) ->
-          // No result — genuine crash. Halt.
-          Done
-      }
-    Error(False) ->
-      // Normal exit DOWN — skip and wait for the actual result.
-      map_unordered_receive(state)
-  }
-}
-
-@target(erlang)
-fn dispatch_unordered(state: MapUnordered(a, b)) -> MapUnordered(a, b) {
-  // The `workers_busy >= max_buffer` check is implied by
-  // `workers_busy >= max_workers` together with the validated
-  // `max_buffer >= max_workers`, so it is intentionally not duplicated
-  // here.
-  case state.source_drained || state.workers_busy >= state.max_workers {
-    True -> state
-    False ->
-      case datastream.pull(state.source) {
-        Done -> MapUnordered(..state, source_drained: True)
-        Next(element, rest) -> {
-          let subj = state.result_subject
-          let func = state.f
-          let pid =
-            process.spawn_unlinked(fn() { process.send(subj, func(element)) })
-          let _monitor = process.monitor(pid)
-          dispatch_unordered(
-            MapUnordered(
-              ..state,
-              source: rest,
-              workers_busy: state.workers_busy + 1,
-            ),
-          )
-        }
-      }
-  }
-}
-
-// --- map_ordered ---------------------------------------------------------
-
-@target(erlang)
-type MapOrdered(a, b) {
-  MapOrdered(
-    source: Stream(a),
-    f: fn(a) -> b,
-    max_workers: Int,
-    max_buffer: Int,
-    workers_busy: Int,
-    in_flight: Int,
-    next_dispatch_index: Int,
-    next_emit_index: Int,
-    result_subject: Subject(#(Int, b)),
-    pending: Dict(Int, b),
-    source_drained: Bool,
+  use Nil <- result.map(check_par_args(
+    "map_unordered_with",
+    max_workers,
+    max_buffer,
+  ))
+  map_stream(
+    stream,
+    MapSettings(f:, max_workers:, max_buffer:, order: CompletionOrder),
   )
 }
 
@@ -438,21 +316,8 @@ pub fn map_ordered_with(
   max_workers max_workers: Int,
   max_buffer max_buffer: Int,
 ) -> Stream(b) {
-  validate_par_args(max_workers, max_buffer)
-  let result_subject = process.new_subject()
-  build_map_ordered_stream(MapOrdered(
-    source: stream,
-    f: f,
-    max_workers: max_workers,
-    max_buffer: max_buffer,
-    workers_busy: 0,
-    in_flight: 0,
-    next_dispatch_index: 0,
-    next_emit_index: 0,
-    result_subject: result_subject,
-    pending: dict.new(),
-    source_drained: False,
-  ))
+  map_ordered_with_checked(over: stream, with: f, max_workers:, max_buffer:)
+  |> or_panic
 }
 
 @target(erlang)
@@ -474,138 +339,158 @@ pub fn map_ordered_with_checked(
   max_workers max_workers: Int,
   max_buffer max_buffer: Int,
 ) -> Result(Stream(b), ParArgError) {
-  case check_par_args("map_ordered_with", max_workers, max_buffer) {
-    Error(e) -> Error(e)
-    Ok(Nil) -> {
-      let result_subject = process.new_subject()
-      Ok(
-        build_map_ordered_stream(MapOrdered(
-          source: stream,
-          f: f,
-          max_workers: max_workers,
-          max_buffer: max_buffer,
-          workers_busy: 0,
-          in_flight: 0,
-          next_dispatch_index: 0,
-          next_emit_index: 0,
-          result_subject: result_subject,
-          pending: dict.new(),
-          source_drained: False,
-        )),
-      )
-    }
-  }
+  use Nil <- result.map(check_par_args(
+    "map_ordered_with",
+    max_workers,
+    max_buffer,
+  ))
+  map_stream(
+    stream,
+    MapSettings(f:, max_workers:, max_buffer:, order: InputOrder),
+  )
 }
 
 @target(erlang)
-fn build_map_ordered_stream(state: MapOrdered(a, b)) -> Stream(b) {
-  datastream.make(pull: fn() { map_ordered_step(state) }, close: fn() {
-    map_ordered_close(state)
-  })
+/// The mailbox and workers are created on the first pull, in the
+/// process that pulls, so every run starts clean.
+fn map_stream(stream: Stream(a), settings: MapSettings(a, b)) -> Stream(b) {
+  datastream.make(
+    pull: fn() {
+      map_step(MapRun(
+        settings:,
+        source: stream,
+        source_drained: False,
+        mailbox: pump.new_mailbox(),
+        reaper: pump.start_reaper(),
+        running: dict.new(),
+        watching: dict.new(),
+        finished: dict.new(),
+        next_dispatch_index: 0,
+        next_emit_index: 0,
+      ))
+    },
+    close: fn() { datastream.close(stream) },
+  )
 }
 
 @target(erlang)
-fn map_ordered_close(state: MapOrdered(a, b)) -> Nil {
-  case state.source_drained {
+fn map_active(run: MapRun(a, b)) -> Stream(b) {
+  datastream.make(pull: fn() { map_step(run) }, close: fn() { map_abort(run) })
+}
+
+@target(erlang)
+/// Close the upstream unless it is drained and stop the workers.
+fn map_abort(run: MapRun(a, b)) -> Nil {
+  case run.source_drained {
     True -> Nil
-    False -> datastream.close(state.source)
+    False -> datastream.close(run.source)
   }
+  stop_tasks(run)
 }
 
 @target(erlang)
-fn map_ordered_step(state: MapOrdered(a, b)) -> datastream.Step(b, Stream(b)) {
-  let state = dispatch_ordered(state)
-  case dict.get(state.pending, state.next_emit_index) {
-    Ok(value) ->
+/// Kill the busy workers and drop whatever they still send.
+fn stop_tasks(run: MapRun(a, b)) -> Nil {
+  dict.each(run.running, fn(_, worker) {
+    let #(pid, monitor) = worker
+    process.demonitor_process(monitor)
+    process.kill(pid)
+  })
+  pump.stop_reaper(run.reaper)
+  pump.close_mailbox(run.mailbox)
+}
+
+@target(erlang)
+fn map_step(run: MapRun(a, b)) -> datastream.Step(b, Stream(b)) {
+  let run = map_dispatch(run)
+  case dict.get(run.finished, run.next_emit_index), dict.is_empty(run.running) {
+    Ok(value), _ ->
       Next(
         value,
-        build_map_ordered_stream(
-          MapOrdered(
-            ..state,
-            pending: dict.delete(state.pending, state.next_emit_index),
-            next_emit_index: state.next_emit_index + 1,
-            in_flight: state.in_flight - 1,
+        map_active(
+          MapRun(
+            ..run,
+            finished: dict.delete(run.finished, run.next_emit_index),
+            next_emit_index: run.next_emit_index + 1,
           ),
         ),
       )
-    Error(_) ->
-      case state.workers_busy {
-        0 -> Done
-        _ -> {
-          map_ordered_receive(state)
+    Error(_), True -> {
+      stop_tasks(run)
+      Done
+    }
+    Error(_), False ->
+      case pump.receive_forever(from: run.mailbox, watching: run.watching) {
+        Received(#(index, value)) -> {
+          let run = map_settle(run, index)
+          case run.settings.order {
+            CompletionOrder -> Next(value, map_active(run))
+            InputOrder ->
+              map_step(
+                MapRun(..run, finished: dict.insert(run.finished, index, value)),
+              )
+          }
         }
+        WorkerDown(reason:, ..) -> {
+          map_abort(run)
+          pump.raise_worker_crash("datastream/erlang/par", reason)
+        }
+        TimedOut -> map_step(run)
       }
   }
 }
 
 @target(erlang)
-fn map_ordered_receive(
-  state: MapOrdered(a, b),
-) -> datastream.Step(b, Stream(b)) {
-  let selector =
-    process.new_selector()
-    |> process.select_map(state.result_subject, fn(msg) { Ok(msg) })
-    |> process.select_monitors(fn(down) {
-      case down {
-        process.ProcessDown(reason: process.Normal, ..) -> Error(False)
-        _ -> Error(True)
-      }
-    })
-  case process.selector_receive_forever(from: selector) {
-    Ok(#(idx, value)) ->
-      map_ordered_step(
-        MapOrdered(
-          ..state,
-          workers_busy: state.workers_busy - 1,
-          pending: dict.insert(state.pending, idx, value),
-        ),
+/// Forget the worker for `index` once its result has arrived.
+fn map_settle(run: MapRun(a, b), index: Int) -> MapRun(a, b) {
+  case dict.get(run.running, index) {
+    Ok(#(_, monitor)) -> {
+      process.demonitor_process(monitor)
+      MapRun(
+        ..run,
+        running: dict.delete(run.running, index),
+        watching: dict.delete(run.watching, monitor),
       )
-    Error(True) ->
-      // Abnormal exit. Check subject briefly before halting.
-      case process.receive(from: state.result_subject, within: 10) {
-        Ok(#(idx, value)) ->
-          map_ordered_step(
-            MapOrdered(
-              ..state,
-              workers_busy: state.workers_busy - 1,
-              pending: dict.insert(state.pending, idx, value),
-            ),
-          )
-        Error(_) -> Done
-      }
-    Error(False) ->
-      // Normal exit DOWN — skip and wait for the actual result.
-      map_ordered_receive(state)
+    }
+    Error(_) -> run
   }
 }
 
 @target(erlang)
-fn dispatch_ordered(state: MapOrdered(a, b)) -> MapOrdered(a, b) {
+fn map_dispatch(run: MapRun(a, b)) -> MapRun(a, b) {
+  let busy = dict.size(run.running)
+  let in_flight = busy + dict.size(run.finished)
   case
-    state.source_drained
-    || state.workers_busy >= state.max_workers
-    || state.in_flight >= state.max_buffer
+    run.source_drained
+    || busy >= run.settings.max_workers
+    || in_flight >= run.settings.max_buffer
   {
-    True -> state
+    True -> run
     False ->
-      case datastream.pull(state.source) {
-        Done -> MapOrdered(..state, source_drained: True)
+      // A panicking upstream must not leave the busy workers running.
+      case
+        pump.guard(fn() { datastream.pull(run.source) }, on_crash: fn() {
+          stop_tasks(run)
+        })
+      {
+        Done -> MapRun(..run, source_drained: True)
         Next(element, rest) -> {
-          let subj = state.result_subject
-          let func = state.f
-          let position = state.next_dispatch_index
-          let pid =
-            process.spawn_unlinked(fn() {
-              process.send(subj, #(position, func(element)))
-            })
-          let _monitor = process.monitor(pid)
-          dispatch_ordered(
-            MapOrdered(
-              ..state,
+          let index = run.next_dispatch_index
+          let function = run.settings.f
+          let #(pid, monitor) =
+            pump.spawn_task(
+              into: run.mailbox,
+              tagged: index,
+              linked_to: run.reaper,
+              running: fn() { function(element) },
+            )
+          map_dispatch(
+            MapRun(
+              ..run,
               source: rest,
-              workers_busy: state.workers_busy + 1,
-              in_flight: state.in_flight + 1,
-              next_dispatch_index: position + 1,
+              running: dict.insert(run.running, index, #(pid, monitor)),
+              watching: dict.insert(run.watching, monitor, index),
+              next_dispatch_index: index + 1,
             ),
           )
         }
@@ -635,16 +520,13 @@ pub fn each_ordered_with(
   max_workers max_workers: Int,
   max_buffer max_buffer: Int,
 ) -> Nil {
-  map_ordered_with(
+  each_ordered_with_checked(
     over: stream,
-    with: fn(x) {
-      effect(x)
-      Nil
-    },
-    max_workers: max_workers,
-    max_buffer: max_buffer,
+    with: effect,
+    max_workers:,
+    max_buffer:,
   )
-  |> fold.drain
+  |> or_panic
 }
 
 @target(erlang)
@@ -658,18 +540,14 @@ pub fn each_ordered_with_checked(
   max_workers max_workers: Int,
   max_buffer max_buffer: Int,
 ) -> Result(Nil, ParArgError) {
-  case check_par_args("each_ordered_with", max_workers, max_buffer) {
-    Error(e) -> Error(e)
-    Ok(Nil) -> {
-      each_ordered_with(
-        over: stream,
-        with: effect,
-        max_workers: max_workers,
-        max_buffer: max_buffer,
-      )
-      Ok(Nil)
-    }
-  }
+  map_ordered_with_checked(
+    over: stream,
+    with: effect,
+    max_workers:,
+    max_buffer:,
+  )
+  |> result.map(fold.drain)
+  |> result.map_error(rename_function(_, "each_ordered_with"))
 }
 
 @target(erlang)
@@ -695,16 +573,13 @@ pub fn each_unordered_with(
   max_workers max_workers: Int,
   max_buffer max_buffer: Int,
 ) -> Nil {
-  map_unordered_with(
+  each_unordered_with_checked(
     over: stream,
-    with: fn(x) {
-      effect(x)
-      Nil
-    },
-    max_workers: max_workers,
-    max_buffer: max_buffer,
+    with: effect,
+    max_workers:,
+    max_buffer:,
   )
-  |> fold.drain
+  |> or_panic
 }
 
 @target(erlang)
@@ -718,47 +593,42 @@ pub fn each_unordered_with_checked(
   max_workers max_workers: Int,
   max_buffer max_buffer: Int,
 ) -> Result(Nil, ParArgError) {
-  case check_par_args("each_unordered_with", max_workers, max_buffer) {
-    Error(e) -> Error(e)
-    Ok(Nil) -> {
-      each_unordered_with(
-        over: stream,
-        with: effect,
-        max_workers: max_workers,
-        max_buffer: max_buffer,
-      )
-      Ok(Nil)
-    }
+  map_unordered_with_checked(
+    over: stream,
+    with: effect,
+    max_workers:,
+    max_buffer:,
+  )
+  |> result.map(fold.drain)
+  |> result.map_error(rename_function(_, "each_unordered_with"))
+}
+
+@target(erlang)
+fn rename_function(error: ParArgError, function: String) -> ParArgError {
+  case error {
+    InvalidMaxWorkers(..) -> InvalidMaxWorkers(..error, function:)
+    BufferLessThanWorkers(..) -> BufferLessThanWorkers(..error, function:)
+    InvalidMaxBuffer(..) -> InvalidMaxBuffer(..error, function:)
   }
 }
 
 // --- merge ---------------------------------------------------------------
 
 @target(erlang)
-type MergeSignal {
-  MergeContinue
-  MergeStop
-}
-
-@target(erlang)
-type MergeMsg(a) {
-  MergeNext(from: Subject(MergeSignal), element: a)
-  MergeDone(from: Subject(MergeSignal))
-}
-
-@target(erlang)
-type MergeState(a) {
-  MergeState(
-    result_subj: Subject(MergeMsg(a)),
-    all_signals: List(Subject(MergeSignal)),
-    // Round-robin queue of workers waiting for a `Continue`. Stored
-    // as a Banker's deque (front + reversed back) so enqueue and
-    // dequeue are amortised O(1).
-    pending_front: List(Subject(MergeSignal)),
-    pending_back: List(Subject(MergeSignal)),
-    pending_emit: Option(Subject(MergeSignal)),
-    total: Int,
-    completed: Int,
+/// One run of a `merge` stream. `workers` holds the pumps whose source
+/// has not ended, by index. `waiting_front` / `waiting_back` form a
+/// two-list queue of pumps waiting for a request, so that at most
+/// `max_buffer` requests are outstanding. `last_emitted` is the pump
+/// whose element was handed downstream last; it rejoins the queue on
+/// the next pull.
+type MergeRun(a) {
+  MergeRun(
+    mailbox: Mailbox(#(Int, Reply(a))),
+    workers: Dict(Int, Worker),
+    watching: Dict(Monitor, Int),
+    waiting_front: List(Int),
+    waiting_back: List(Int),
+    last_emitted: Option(Int),
   )
 }
 
@@ -792,8 +662,7 @@ pub fn merge_with(
   streams streams: List(Stream(a)),
   max_buffer max_buffer: Int,
 ) -> Stream(a) {
-  validate_buffer(max_buffer)
-  merge_with_unchecked(streams, max_buffer)
+  merge_with_checked(streams:, max_buffer:) |> or_panic
 }
 
 @target(erlang)
@@ -812,291 +681,285 @@ pub fn merge_with_checked(
   streams streams: List(Stream(a)),
   max_buffer max_buffer: Int,
 ) -> Result(Stream(a), ParArgError) {
-  case check_buffer("merge_with", max_buffer) {
-    Error(e) -> Error(e)
-    Ok(Nil) -> Ok(merge_with_unchecked(streams, max_buffer))
-  }
+  use Nil <- result.map(check_buffer("merge_with", max_buffer))
+  datastream.make(
+    pull: fn() { merge_step(start_merge(streams, max_buffer)) },
+    close: fn() { list.each(streams, datastream.close) },
+  )
 }
 
 @target(erlang)
-fn merge_with_unchecked(
-  streams: List(Stream(a)),
-  max_buffer: Int,
-) -> Stream(a) {
-  let result_subj = process.new_subject()
-  let coordinator_pid = process.self()
-  let all_signals =
-    list.map(streams, fn(stream) {
-      spawn_merge_pump(stream, result_subj, coordinator_pid)
+fn start_merge(streams: List(Stream(a)), max_buffer: Int) -> MergeRun(a) {
+  let mailbox = pump.new_mailbox()
+  let workers =
+    list.index_map(streams, fn(stream, index) {
+      #(index, pump.spawn_pump(over: stream, into: mailbox, tagged: index))
     })
-  let total = list.length(streams)
-  let initial_count = case max_buffer < total {
-    True -> max_buffer
-    False -> total
-  }
-  let initial = list.take(all_signals, initial_count)
-  let deferred = list.drop(all_signals, initial_count)
-  list.each(initial, fn(sig) { process.send(sig, MergeContinue) })
-  build_merge_stream(MergeState(
-    result_subj: result_subj,
-    all_signals: all_signals,
-    pending_front: deferred,
-    pending_back: [],
-    pending_emit: None,
-    total: total,
-    completed: 0,
-  ))
+  let #(started, waiting) = list.split(workers, max_buffer)
+  list.each(started, fn(entry) { pump.request(entry.1) })
+  MergeRun(
+    mailbox:,
+    workers: dict.from_list(workers),
+    watching: watch_all(workers),
+    waiting_front: list.map(waiting, fn(entry) { entry.0 }),
+    waiting_back: [],
+    last_emitted: None,
+  )
 }
 
 @target(erlang)
-fn spawn_merge_pump(
-  stream: Stream(a),
-  result_subj: Subject(MergeMsg(a)),
-  coordinator_pid: process.Pid,
-) -> Subject(MergeSignal) {
-  let handshake = process.new_subject()
-  let _pid =
-    process.spawn_unlinked(fn() {
-      let my_signal = process.new_subject()
-      process.send(handshake, my_signal)
-      merge_pump(stream, result_subj, my_signal, coordinator_pid)
-    })
-  process.receive_forever(from: handshake)
-}
-
-@target(erlang)
-fn merge_pump(
-  stream: Stream(a),
-  result_subj: Subject(MergeMsg(a)),
-  my_signal: Subject(MergeSignal),
-  coordinator_pid: process.Pid,
-) -> Nil {
-  case
-    process.receive(from: my_signal, within: merge_worker_liveness_check_ms)
-  {
-    Ok(MergeStop) -> datastream.close(stream)
-    Ok(MergeContinue) ->
-      case datastream.pull(stream) {
-        Next(element, rest) -> {
-          process.send(result_subj, MergeNext(my_signal, element))
-          merge_pump(rest, result_subj, my_signal, coordinator_pid)
-        }
-        Done -> process.send(result_subj, MergeDone(my_signal))
-      }
-    Error(_) ->
-      case process.is_alive(coordinator_pid) {
-        True -> merge_pump(stream, result_subj, my_signal, coordinator_pid)
-        False -> datastream.close(stream)
-      }
-  }
-}
-
-@target(erlang)
-fn build_merge_stream(state: MergeState(a)) -> Stream(a) {
-  datastream.make(pull: fn() { merge_step(state) }, close: fn() {
-    merge_close(state)
+fn watch_all(workers: List(#(Int, Worker))) -> Dict(Monitor, Int) {
+  list.fold(workers, dict.new(), fn(watching, entry) {
+    dict.insert(watching, pump.monitor_of(entry.1), entry.0)
   })
 }
 
 @target(erlang)
-fn merge_close(state: MergeState(a)) -> Nil {
-  case state.completed >= state.total {
-    True -> Nil
-    False ->
-      list.each(state.all_signals, fn(sig) { process.send(sig, MergeStop) })
-  }
+fn merge_active(run: MergeRun(a)) -> Stream(a) {
+  datastream.make(pull: fn() { merge_step(run) }, close: fn() {
+    stop_all(run.workers, run.mailbox)
+  })
 }
 
 @target(erlang)
-fn merge_step(state: MergeState(a)) -> datastream.Step(a, Stream(a)) {
-  let state = case state.pending_emit {
-    Some(prev) -> release_slot(state, prev, True)
-    None -> state
+fn stop_all(workers: Dict(Int, Worker), mailbox: Mailbox(message)) -> Nil {
+  dict.each(workers, fn(_, worker) { pump.stop(worker) })
+  pump.close_mailbox(mailbox)
+}
+
+@target(erlang)
+fn merge_step(run: MergeRun(a)) -> datastream.Step(a, Stream(a)) {
+  let run = case run.last_emitted {
+    Some(index) ->
+      request_next(
+        MergeRun(
+          ..run,
+          waiting_back: [index, ..run.waiting_back],
+          last_emitted: None,
+        ),
+      )
+    None -> run
   }
-  let state = MergeState(..state, pending_emit: None)
-  case state.completed >= state.total {
-    True -> Done
+  case dict.is_empty(run.workers) {
+    True -> {
+      pump.close_mailbox(run.mailbox)
+      Done
+    }
     False ->
-      case process.receive_forever(from: state.result_subj) {
-        MergeNext(from, element) ->
+      case pump.receive_forever(from: run.mailbox, watching: run.watching) {
+        Received(#(index, Element(element))) ->
           Next(
             element,
-            build_merge_stream(MergeState(..state, pending_emit: Some(from))),
+            merge_active(MergeRun(..run, last_emitted: Some(index))),
           )
-        MergeDone(from) -> {
-          let state = release_slot(state, from, False)
-          merge_step(MergeState(..state, completed: state.completed + 1))
+        Received(#(index, Exhausted)) ->
+          merge_step(request_next(merge_forget(run, index)))
+        WorkerDown(reason:, ..) -> {
+          stop_all(run.workers, run.mailbox)
+          pump.raise_worker_crash("datastream/erlang/par.merge", reason)
         }
+        TimedOut -> merge_step(run)
       }
   }
 }
 
 @target(erlang)
-fn release_slot(
-  state: MergeState(a),
-  just_finished: Subject(MergeSignal),
-  finished_can_continue: Bool,
-) -> MergeState(a) {
-  // Round-robin: a worker that just emitted joins the back of the
-  // queue, then we hand Continue to whoever is at the front. This
-  // gives fair scheduling and avoids starving the first workers when
-  // streams > max_buffer. The queue is a Banker's deque
-  // (front + reversed back); both operations are amortised O(1).
-  let back = case finished_can_continue {
-    True -> [just_finished, ..state.pending_back]
-    False -> state.pending_back
-  }
-  case state.pending_front {
-    [next, ..rest_front] -> {
-      process.send(next, MergeContinue)
-      MergeState(..state, pending_front: rest_front, pending_back: back)
+fn merge_forget(run: MergeRun(a), index: Int) -> MergeRun(a) {
+  case dict.get(run.workers, index) {
+    Ok(worker) -> {
+      pump.forget(worker)
+      MergeRun(
+        ..run,
+        workers: dict.delete(run.workers, index),
+        watching: dict.delete(run.watching, pump.monitor_of(worker)),
+      )
     }
-    [] ->
-      case list.reverse(back) {
-        [next, ..rest_front] -> {
-          process.send(next, MergeContinue)
-          MergeState(..state, pending_front: rest_front, pending_back: [])
-        }
-        [] -> MergeState(..state, pending_front: [], pending_back: [])
+    Error(_) -> run
+  }
+}
+
+@target(erlang)
+/// Hand the freed request to the pump that has waited longest.
+fn request_next(run: MergeRun(a)) -> MergeRun(a) {
+  let #(front, back) = case run.waiting_front {
+    [] -> #(list.reverse(run.waiting_back), [])
+    front -> #(front, run.waiting_back)
+  }
+  case front {
+    [index, ..front] -> {
+      case dict.get(run.workers, index) {
+        Ok(worker) -> pump.request(worker)
+        Error(_) -> Nil
       }
+      MergeRun(..run, waiting_front: front, waiting_back: back)
+    }
+    [] -> MergeRun(..run, waiting_front: [], waiting_back: [])
   }
 }
 
 // --- race ----------------------------------------------------------------
 
 @target(erlang)
-type RaceMsg(a) {
-  RaceNext(index: Int, element: a, rest: Stream(a))
-  RaceDone(index: Int)
+type RaceState(a) {
+  /// No source has produced an element yet; `workers` holds the
+  /// sources that have not ended.
+  RaceWaiting(
+    mailbox: Mailbox(#(Int, Reply(a))),
+    workers: Dict(Int, Worker),
+    watching: Dict(Monitor, Int),
+  )
+  /// Source `index` won and is the only one still pulled.
+  RaceWinning(
+    mailbox: Mailbox(#(Int, Reply(a))),
+    index: Int,
+    winner: Worker,
+    watching: Dict(Monitor, Int),
+  )
 }
 
 @target(erlang)
 /// Wait for the first source to emit; signal the other workers to
 /// stop, then continue with the winning source until it halts.
 ///
-/// Implementation: spawn one worker per source. Each worker checks
-/// for a stop signal, then does a single `datastream.pull` and
-/// reports back on a shared subject. The first `RaceNext` wins; the
-/// coordinator drains any loser messages already in its mailbox and
-/// closes the `rest` they carry, then sends a stop signal to every
-/// other worker.
-///
-/// **Best-effort loser cleanup.** A loser worker that was still
-/// inside its `datastream.pull` when the stop signal arrived has no
-/// way to observe it and will go on to send its `RaceNext` after the
-/// coordinator has stopped reading. Such a `RaceNext` is dropped and
-/// its `rest` is not closed. BEAM-internal resources held by the
-/// abandoned `rest` are reclaimed by the runtime; external resources
-/// (file descriptors, sockets) may leak. Pass external-resource
-/// streams to `race` only when this trade-off is acceptable.
+/// Implementation: on the first pull, spawn one worker per source and
+/// ask each for one element. The first element to arrive wins; every
+/// other worker is told to stop and closes its source once its pull in
+/// progress returns. The winning worker keeps pulling its source one
+/// element per downstream pull.
 pub fn race(streams streams: List(Stream(a))) -> Stream(a) {
   case streams {
     [] -> source.empty()
-    _ -> race_with(streams)
+    _ ->
+      datastream.make(
+        pull: fn() { race_step(start_race(streams)) },
+        close: fn() { list.each(streams, datastream.close) },
+      )
   }
 }
 
 @target(erlang)
-fn race_with(streams: List(Stream(a))) -> Stream(a) {
-  let result_subj = process.new_subject()
-  let total = list.length(streams)
-  let stop_subjs =
-    list.index_map(streams, fn(stream, idx) {
-      pump.spawn_with_stop(fn(stop_subj) {
-        race_first_pull(stream, idx, result_subj, stop_subj)
-      })
+fn start_race(streams: List(Stream(a))) -> RaceState(a) {
+  let mailbox = pump.new_mailbox()
+  let workers =
+    list.index_map(streams, fn(stream, index) {
+      let worker = pump.spawn_pump(over: stream, into: mailbox, tagged: index)
+      pump.request(worker)
+      #(index, worker)
     })
-  build_race_stream(RaceWaiting(stop_subjs, total, result_subj))
-}
-
-@target(erlang)
-fn race_first_pull(
-  stream: Stream(a),
-  index: Int,
-  result_subj: Subject(RaceMsg(a)),
-  stop_subj: Subject(Stop),
-) -> Nil {
-  case process.receive(from: stop_subj, within: 0) {
-    Ok(_) -> datastream.close(stream)
-    Error(_) ->
-      case datastream.pull(stream) {
-        Next(element, rest) ->
-          process.send(
-            result_subj,
-            RaceNext(index: index, element: element, rest: rest),
-          )
-        Done -> process.send(result_subj, RaceDone(index: index))
-      }
-  }
-}
-
-@target(erlang)
-type RaceState(a) {
   RaceWaiting(
-    stop_subjs: List(Subject(Stop)),
-    remaining: Int,
-    subj: Subject(RaceMsg(a)),
+    mailbox:,
+    workers: dict.from_list(workers),
+    watching: watch_all(workers),
   )
-  RaceWinning(stream: Stream(a))
 }
 
 @target(erlang)
-fn build_race_stream(state: RaceState(a)) -> Stream(a) {
+fn race_active(state: RaceState(a)) -> Stream(a) {
   datastream.make(pull: fn() { race_step(state) }, close: fn() {
-    race_close(state)
+    case state {
+      RaceWaiting(mailbox:, workers:, ..) -> stop_all(workers, mailbox)
+      RaceWinning(mailbox:, winner:, ..) -> {
+        pump.stop(winner)
+        pump.close_mailbox(mailbox)
+      }
+    }
   })
-}
-
-@target(erlang)
-fn race_close(state: RaceState(a)) -> Nil {
-  case state {
-    RaceWinning(stream) -> datastream.close(stream)
-    RaceWaiting(_, 0, _) -> Nil
-    RaceWaiting(stop_subjs, _, _) -> list.each(stop_subjs, pump.stop)
-  }
 }
 
 @target(erlang)
 fn race_step(state: RaceState(a)) -> datastream.Step(a, Stream(a)) {
   case state {
-    RaceWinning(stream) ->
-      case datastream.pull(stream) {
-        Next(element, rest) ->
-          Next(element, build_race_stream(RaceWinning(rest)))
-        Done -> Done
-      }
-    RaceWaiting(_, 0, _) -> Done
-    RaceWaiting(stop_subjs, remaining, subj) ->
-      case process.receive_forever(from: subj) {
-        RaceNext(index, element, rest) -> {
-          stop_losers(stop_subjs, index)
-          drain_loser_messages(subj)
-          Next(element, build_race_stream(RaceWinning(rest)))
+    RaceWaiting(mailbox:, workers:, watching:) ->
+      case dict.is_empty(workers) {
+        True -> {
+          pump.close_mailbox(mailbox)
+          Done
         }
-        RaceDone(_) -> race_step(RaceWaiting(stop_subjs, remaining - 1, subj))
+        False -> race_wait(mailbox, workers, watching)
       }
+    RaceWinning(mailbox:, index:, winner:, watching:) -> {
+      pump.request(winner)
+      race_follow(mailbox, index, winner, watching)
+    }
   }
 }
 
 @target(erlang)
-fn stop_losers(stop_subjs: List(Subject(Stop)), winner_index: Int) -> Nil {
-  list.index_map(stop_subjs, fn(stop_subj, idx) {
-    case idx == winner_index {
-      True -> Nil
-      False -> pump.stop(stop_subj)
+fn race_wait(
+  mailbox: Mailbox(#(Int, Reply(a))),
+  workers: Dict(Int, Worker),
+  watching: Dict(Monitor, Int),
+) -> datastream.Step(a, Stream(a)) {
+  case pump.receive_forever(from: mailbox, watching:) {
+    Received(#(index, Element(element))) -> {
+      let #(winner, losers) = case dict.get(workers, index) {
+        Ok(winner) -> #(Ok(winner), dict.delete(workers, index))
+        Error(_) -> #(Error(Nil), workers)
+      }
+      dict.each(losers, fn(_, loser) { pump.stop(loser) })
+      case winner {
+        Ok(winner) ->
+          Next(
+            element,
+            race_active(RaceWinning(
+              mailbox:,
+              index:,
+              winner:,
+              watching: dict.from_list([#(pump.monitor_of(winner), index)]),
+            )),
+          )
+        Error(_) ->
+          race_step(RaceWaiting(
+            mailbox:,
+            workers: dict.new(),
+            watching: dict.new(),
+          ))
+      }
     }
-  })
-  Nil
+    Received(#(index, Exhausted)) -> {
+      case dict.get(workers, index) {
+        Ok(worker) -> pump.forget(worker)
+        Error(_) -> Nil
+      }
+      race_step(RaceWaiting(
+        mailbox:,
+        workers: dict.delete(workers, index),
+        watching:,
+      ))
+    }
+    WorkerDown(reason:, ..) -> {
+      stop_all(workers, mailbox)
+      pump.raise_worker_crash("datastream/erlang/par.race", reason)
+    }
+    TimedOut -> race_wait(mailbox, workers, watching)
+  }
 }
 
 @target(erlang)
-fn drain_loser_messages(subj: Subject(RaceMsg(a))) -> Nil {
-  case process.receive(from: subj, within: 0) {
-    Ok(RaceNext(_, _, rest)) -> {
-      datastream.close(rest)
-      drain_loser_messages(subj)
+fn race_follow(
+  mailbox: Mailbox(#(Int, Reply(a))),
+  index: Int,
+  winner: Worker,
+  watching: Dict(Monitor, Int),
+) -> datastream.Step(a, Stream(a)) {
+  case pump.receive_forever(from: mailbox, watching:) {
+    // A stopped loser may still deliver the element it was pulling.
+    Received(#(from, _)) if from != index ->
+      race_follow(mailbox, index, winner, watching)
+    Received(#(_, Element(element))) ->
+      Next(
+        element,
+        race_active(RaceWinning(mailbox:, index:, winner:, watching:)),
+      )
+    Received(#(_, Exhausted)) -> {
+      pump.forget(winner)
+      pump.close_mailbox(mailbox)
+      Done
     }
-    Ok(RaceDone(_)) -> drain_loser_messages(subj)
-    Error(_) -> Nil
+    WorkerDown(reason:, ..) -> {
+      pump.close_mailbox(mailbox)
+      pump.raise_worker_crash("datastream/erlang/par.race", reason)
+    }
+    TimedOut -> race_follow(mailbox, index, winner, watching)
   }
 }

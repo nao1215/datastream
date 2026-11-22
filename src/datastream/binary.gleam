@@ -9,7 +9,10 @@
 //// materialises the full input.
 
 import datastream.{type Step, type Stream, Done, Next}
+import datastream/internal/core
 import gleam/bit_array
+import gleam/list
+import gleam/option.{type Option, None, Some}
 
 // --- argument validation --------------------------------------------------
 
@@ -34,6 +37,65 @@ pub type BinaryArgError {
   NotPositiveSize(function: String, given: Int)
 }
 
+// --- buffered bytes -------------------------------------------------------
+
+// Bytes received but not framed yet. `joined` is one contiguous
+// binary; `later` holds the chunks that arrived after it, newest
+// first, and is joined only once a frame needs those bytes, so a frame
+// assembled from many small chunks is copied once. `size` counts the
+// bytes in both.
+type Buffered {
+  Buffered(joined: BitArray, later: List(BitArray), size: Int)
+}
+
+const nothing_buffered = Buffered(joined: <<>>, later: [], size: 0)
+
+fn buffer_chunk(buffered: Buffered, chunk: BitArray) -> Buffered {
+  case bit_array.byte_size(chunk) {
+    0 -> buffered
+    chunk_size ->
+      Buffered(
+        ..buffered,
+        later: [chunk, ..buffered.later],
+        size: buffered.size + chunk_size,
+      )
+  }
+}
+
+// Split off the first `count` bytes. The caller checks that
+// `buffered.size >= count`. `size` counts a partial trailing byte as a
+// whole one, so a chunk that is not byte-aligned can leave fewer than
+// `count` whole bytes; that is an `Error`, and the framer then ends.
+fn take_bytes(
+  buffered: Buffered,
+  count: Int,
+) -> Result(#(BitArray, Buffered), Nil) {
+  let joined = case bit_array.byte_size(buffered.joined) >= count {
+    True -> buffered.joined
+    False -> bit_array.concat([buffered.joined, ..list.reverse(buffered.later)])
+  }
+  let later = case joined == buffered.joined {
+    True -> buffered.later
+    False -> []
+  }
+  case joined {
+    <<taken:bytes-size(count), rest:bits>> ->
+      Ok(#(taken, Buffered(joined: rest, later:, size: buffered.size - count)))
+    _ -> Error(Nil)
+  }
+}
+
+// Pull one more chunk into `buffered`, or `None` once `source` is done.
+fn refill(
+  source: Stream(BitArray),
+  buffered: Buffered,
+) -> Option(#(Stream(BitArray), Buffered)) {
+  case datastream.pull(source) {
+    Next(chunk, rest) -> Some(#(rest, buffer_chunk(buffered, chunk)))
+    Done -> None
+  }
+}
+
 // --- bytes ----------------------------------------------------------------
 
 /// Yield each byte of each chunk in order, as `Int` in `0..255`.
@@ -42,44 +104,26 @@ pub type BinaryArgError {
 /// `Stream(Int)` so callers can move into the byte-stream-shaped world
 /// without writing the per-byte `unfold` themselves.
 pub fn bytes(over stream: Stream(BitArray)) -> Stream(Int) {
-  bytes_active(stream, <<>>, False)
+  bytes_active(stream, <<>>)
 }
 
-fn maybe_close(source: Stream(a), source_drained: Bool) -> Nil {
-  case source_drained {
-    True -> Nil
-    False -> datastream.close(source)
-  }
-}
-
-fn bytes_active(
-  source: Stream(BitArray),
-  buffer: BitArray,
-  source_drained: Bool,
-) -> Stream(Int) {
-  datastream.make(
-    pull: fn() { bytes_pull(source, buffer, source_drained) },
-    close: fn() { maybe_close(source, source_drained) },
-  )
+fn bytes_active(source: Stream(BitArray), buffer: BitArray) -> Stream(Int) {
+  datastream.make(pull: fn() { bytes_pull(source, buffer) }, close: fn() {
+    datastream.close(source)
+  })
 }
 
 fn bytes_pull(
   source: Stream(BitArray),
   buffer: BitArray,
-  source_drained: Bool,
 ) -> Step(Int, Stream(Int)) {
   case buffer {
-    <<b:size(8), rest:bits>> ->
-      Next(b, bytes_active(source, rest, source_drained))
+    <<b:size(8), rest:bits>> -> Next(b, bytes_active(source, rest))
     _ ->
-      case source_drained {
-        True -> Done
-        False ->
-          case datastream.pull(source) {
-            Next(chunk, source_rest) ->
-              bytes_pull(source_rest, bit_array.append(buffer, chunk), False)
-            Done -> bytes_pull(source, buffer, True)
-          }
+      case datastream.pull(source) {
+        Next(chunk, source_rest) ->
+          bytes_pull(source_rest, bit_array.append(buffer, chunk))
+        Done -> Done
       }
   }
 }
@@ -97,8 +141,12 @@ fn bytes_pull(
 pub type IncompleteFrame {
   IncompleteFrame(expected: Int, got: Int)
   /// The prefix declared a payload length exceeding `max_frame_size`.
+  /// The stream ends after this element, since the bytes that follow
+  /// can no longer be split into frames.
   FrameTooLarge(claimed: Int, max: Int)
 }
+
+const default_max_frame_size = 16_777_216
 
 /// Read a `prefix_size` byte big-endian unsigned length, then yield
 /// the next `length` bytes as a frame, wrapped in `Ok`.
@@ -116,11 +164,9 @@ pub type IncompleteFrame {
 /// chain `fold.collect_result` to stop on the first truncation, or
 /// `fold.partition_result` to drive the stream to completion and split
 /// well-formed frames from the incomplete tail.
-/// Default maximum frame size: 16 MiB. Frames claiming more bytes
-/// than this are rejected immediately with `FrameTooLarge` without
-/// buffering the payload. Override via `length_prefixed_with`.
-const default_max_frame_size = 16_777_216
-
+///
+/// Frames longer than 16 MiB are rejected with `FrameTooLarge`; use
+/// `length_prefixed_with` to set another limit.
 pub fn length_prefixed(
   over stream: Stream(BitArray),
   prefix_size prefix_size: Int,
@@ -135,16 +181,22 @@ pub fn length_prefixed(
 /// Like `length_prefixed`, but with an explicit `max_frame_size` limit.
 /// Frames whose prefix claims more than `max_frame_size` bytes are
 /// rejected immediately with `Error(FrameTooLarge(claimed:, max:))`
-/// without buffering the payload.
+/// without buffering the payload, and the stream ends after that
+/// element.
 pub fn length_prefixed_with(
   over stream: Stream(BitArray),
   prefix_size prefix_size: Int,
   max_frame_size max_frame_size: Int,
 ) -> Stream(Result(BitArray, IncompleteFrame)) {
-  case prefix_size {
-    1 | 2 | 4 | 8 ->
-      length_prefixed_active(stream, <<>>, prefix_size, max_frame_size, False)
-    _ ->
+  case
+    length_prefixed_with_checked(
+      over: stream,
+      prefix_size: prefix_size,
+      max_frame_size: max_frame_size,
+    )
+  {
+    Ok(framed) -> framed
+    Error(_) ->
       panic as "datastream/binary.length_prefixed: prefix_size must be 1, 2, 4, or 8"
   }
 }
@@ -181,180 +233,94 @@ pub fn length_prefixed_with_checked(
 ) -> Result(Stream(Result(BitArray, IncompleteFrame)), BinaryArgError) {
   case prefix_size {
     1 | 2 | 4 | 8 ->
-      Ok(length_prefixed_active(
-        stream,
-        <<>>,
-        prefix_size,
-        max_frame_size,
-        False,
-      ))
+      Ok(
+        length_prefixed_active(LengthPrefixed(
+          source: stream,
+          buffered: nothing_buffered,
+          prefix_size:,
+          max_frame_size:,
+          payload_size: None,
+        )),
+      )
     _ ->
       Error(InvalidPrefixSize(function: "length_prefixed", given: prefix_size))
   }
 }
 
-fn length_prefixed_active(
-  source: Stream(BitArray),
-  buffer: BitArray,
-  prefix_size: Int,
-  max_frame_size: Int,
-  source_drained: Bool,
-) -> Stream(Result(BitArray, IncompleteFrame)) {
-  datastream.make(
-    pull: fn() {
-      length_prefixed_pull(
-        source,
-        buffer,
-        prefix_size,
-        max_frame_size,
-        source_drained,
-      )
-    },
-    close: fn() { maybe_close(source, source_drained) },
+// `payload_size` is `None` while the prefix is being read and
+// `Some(length)` once it has been read and the payload is pending.
+type LengthPrefixed {
+  LengthPrefixed(
+    source: Stream(BitArray),
+    buffered: Buffered,
+    prefix_size: Int,
+    max_frame_size: Int,
+    payload_size: Option(Int),
   )
 }
 
-fn length_prefixed_pull(
-  source: Stream(BitArray),
-  buffer: BitArray,
-  prefix_size: Int,
-  max_frame_size: Int,
-  source_drained: Bool,
-) -> Step(
-  Result(BitArray, IncompleteFrame),
-  Stream(Result(BitArray, IncompleteFrame)),
-) {
-  case bit_array.byte_size(buffer) >= prefix_size {
-    False ->
-      case source_drained {
-        True ->
-          case bit_array.byte_size(buffer) {
-            0 -> Done
-            got ->
-              Next(
-                Error(IncompleteFrame(expected: prefix_size, got: got)),
-                length_prefixed_active(
-                  source,
-                  <<>>,
-                  prefix_size,
-                  max_frame_size,
-                  True,
-                ),
-              )
-          }
-        False ->
-          length_prefixed_pull_more(source, buffer, prefix_size, max_frame_size)
-      }
-    True ->
-      length_prefixed_with_prefix(
-        source,
-        buffer,
-        prefix_size,
-        max_frame_size,
-        source_drained,
-      )
-  }
+fn length_prefixed_active(
+  state: LengthPrefixed,
+) -> Stream(Result(BitArray, IncompleteFrame)) {
+  datastream.make(pull: fn() { length_prefixed_pull(state) }, close: fn() {
+    datastream.close(state.source)
+  })
 }
 
-fn length_prefixed_with_prefix(
-  source: Stream(BitArray),
-  buffer: BitArray,
-  prefix_size: Int,
-  max_frame_size: Int,
-  source_drained: Bool,
+fn length_prefixed_pull(
+  state: LengthPrefixed,
 ) -> Step(
   Result(BitArray, IncompleteFrame),
   Stream(Result(BitArray, IncompleteFrame)),
 ) {
-  let length = read_prefix(buffer, prefix_size)
-  // Reject frames that exceed the configured limit immediately,
-  // without buffering the payload (#158).
-  case length > max_frame_size {
-    True ->
-      Next(
-        Error(FrameTooLarge(claimed: length, max: max_frame_size)),
-        length_prefixed_active(
-          source,
-          <<>>,
-          prefix_size,
-          max_frame_size,
-          source_drained,
-        ),
-      )
-    False -> {
-      let total_needed = prefix_size + length
-      case bit_array.byte_size(buffer) >= total_needed {
-        True ->
-          case
-            bit_array.slice(buffer, prefix_size, length),
-            bit_array.slice(
-              buffer,
-              total_needed,
-              bit_array.byte_size(buffer) - total_needed,
-            )
-          {
-            Ok(frame), Ok(rest) ->
-              Next(
-                Ok(frame),
-                length_prefixed_active(
-                  source,
-                  rest,
-                  prefix_size,
-                  max_frame_size,
-                  source_drained,
-                ),
-              )
-            _, _ -> Done
-          }
-        False ->
-          case source_drained {
-            True ->
-              Next(
-                Error(IncompleteFrame(
-                  expected: length,
-                  got: bit_array.byte_size(buffer) - prefix_size,
-                )),
-                length_prefixed_active(
-                  source,
-                  <<>>,
-                  prefix_size,
-                  max_frame_size,
-                  True,
-                ),
-              )
-            False ->
-              length_prefixed_pull_more(
-                source,
-                buffer,
-                prefix_size,
-                max_frame_size,
-              )
-          }
+  let needed = option.unwrap(state.payload_size, state.prefix_size)
+  case state.buffered.size >= needed {
+    True -> {
+      case take_bytes(state.buffered, needed) {
+        Ok(#(bytes, buffered)) ->
+          length_prefixed_frame(LengthPrefixed(..state, buffered:), bytes)
+        Error(_) -> {
+          datastream.close(state.source)
+          Done
+        }
       }
     }
+    False ->
+      case refill(state.source, state.buffered), state.buffered.size {
+        Some(#(source, buffered)), _ ->
+          length_prefixed_pull(LengthPrefixed(..state, source:, buffered:))
+        None, 0 if state.payload_size == None -> Done
+        None, got ->
+          Next(Error(IncompleteFrame(expected: needed, got:)), core.empty())
+      }
   }
 }
 
-fn length_prefixed_pull_more(
-  source: Stream(BitArray),
-  buffer: BitArray,
-  prefix_size: Int,
-  max_frame_size: Int,
+// Handle `bytes` just taken from the buffer: a payload, or a prefix.
+fn length_prefixed_frame(
+  state: LengthPrefixed,
+  bytes: BitArray,
 ) -> Step(
   Result(BitArray, IncompleteFrame),
   Stream(Result(BitArray, IncompleteFrame)),
 ) {
-  case datastream.pull(source) {
-    Next(chunk, source_rest) ->
-      length_prefixed_pull(
-        source_rest,
-        bit_array.append(buffer, chunk),
-        prefix_size,
-        max_frame_size,
-        False,
+  case state.payload_size, read_prefix(bytes, state.prefix_size) {
+    Some(_), _ ->
+      Next(
+        Ok(bytes),
+        length_prefixed_active(LengthPrefixed(..state, payload_size: None)),
       )
-    Done ->
-      length_prefixed_pull(source, buffer, prefix_size, max_frame_size, True)
+    None, length if length > state.max_frame_size -> {
+      // The bytes after an oversized prefix cannot be framed again,
+      // so the stream ends here.
+      datastream.close(state.source)
+      Next(
+        Error(FrameTooLarge(claimed: length, max: state.max_frame_size)),
+        core.empty(),
+      )
+    }
+    None, length ->
+      length_prefixed_pull(LengthPrefixed(..state, payload_size: Some(length)))
   }
 }
 
@@ -379,111 +345,116 @@ fn read_prefix(buffer: BitArray, size: Int) -> Int {
 ///
 /// If the input does not end with a delimiter, the trailing partial
 /// frame is emitted as the last element.
+///
+/// ## Panics
+///
+/// Panics at construction when `delimiter` is empty, since an empty
+/// delimiter matches everywhere without consuming any input.
 pub fn delimited(
   over stream: Stream(BitArray),
   on delimiter: BitArray,
 ) -> Stream(BitArray) {
-  delimited_active(stream, <<>>, delimiter, False, False, 0)
+  case delimiter {
+    <<>> -> panic as "datastream/binary.delimited: delimiter must not be empty"
+    _ ->
+      delimited_active(Delimited(
+        source: stream,
+        delimiter:,
+        frame: [],
+        recent: [],
+        unscanned: <<>>,
+        has_seen_input: False,
+      ))
+  }
 }
 
-fn delimited_active(
-  source: Stream(BitArray),
-  buffer: BitArray,
-  delimiter: BitArray,
-  source_drained: Bool,
-  has_seen_input: Bool,
-  scan_from: Int,
-) -> Stream(BitArray) {
-  datastream.make(
-    pull: fn() {
-      delimited_pull(
-        source,
-        buffer,
-        delimiter,
-        source_drained,
-        has_seen_input,
-        scan_from,
-      )
-    },
-    close: fn() { maybe_close(source, source_drained) },
+// The current frame is kept as chunks so that it is joined once, when
+// its delimiter is found. `frame` holds the chunks that are certainly
+// part of the frame, newest first. `recent` holds the newest scanned
+// chunks, newest first, just enough of them to cover
+// `byte_size(delimiter) - 1` bytes: a delimiter that starts there may
+// end in a chunk that has not arrived yet, so they are scanned again
+// together with the next chunk. `unscanned` is the input not searched
+// yet.
+type Delimited {
+  Delimited(
+    source: Stream(BitArray),
+    delimiter: BitArray,
+    frame: List(BitArray),
+    recent: List(BitArray),
+    unscanned: BitArray,
+    has_seen_input: Bool,
   )
 }
 
-fn delimited_pull(
-  source: Stream(BitArray),
-  buffer: BitArray,
-  delimiter: BitArray,
-  source_drained: Bool,
-  has_seen_input: Bool,
-  scan_from: Int,
-) -> Step(BitArray, Stream(BitArray)) {
-  case find_delimiter(buffer, delimiter, scan_from) {
-    Ok(pos) -> {
-      let delim_size = bit_array.byte_size(delimiter)
-      case
-        bit_array.slice(buffer, 0, pos),
-        bit_array.slice(
-          buffer,
-          pos + delim_size,
-          bit_array.byte_size(buffer) - pos - delim_size,
-        )
-      {
-        Ok(frame), Ok(rest) ->
+fn delimited_active(state: Delimited) -> Stream(BitArray) {
+  datastream.make(pull: fn() { delimited_pull(state) }, close: fn() {
+    datastream.close(state.source)
+  })
+}
+
+fn delimited_pull(state: Delimited) -> Step(BitArray, Stream(BitArray)) {
+  let window = bit_array.concat(list.reverse([state.unscanned, ..state.recent]))
+  let delimiter_size = bit_array.byte_size(state.delimiter)
+  case find_delimiter(window, state.delimiter, 0) {
+    Ok(position) ->
+      case window {
+        <<
+          before:bytes-size(position),
+          _:bytes-size(delimiter_size),
+          after:bytes,
+        >> ->
           Next(
-            frame,
-            delimited_active(source, rest, delimiter, source_drained, True, 0),
+            bit_array.concat(list.reverse([before, ..state.frame])),
+            delimited_active(
+              Delimited(
+                ..state,
+                frame: [],
+                recent: [],
+                unscanned: after,
+                has_seen_input: True,
+              ),
+            ),
           )
-        _, _ -> Done
+        _ -> Done
       }
-    }
-    Error(_) ->
-      case source_drained {
-        True ->
-          case has_seen_input || bit_array.byte_size(buffer) > 0 {
-            True -> Next(buffer, delimited_drained())
+    Error(_) -> {
+      let #(recent, older) =
+        core.keep_newest(
+          [state.unscanned, ..state.recent],
+          holding: delimiter_size - 1,
+          measured_by: bit_array.byte_size,
+        )
+      let state =
+        Delimited(
+          ..state,
+          frame: list.append(older, state.frame),
+          recent:,
+          unscanned: <<>>,
+        )
+      case datastream.pull(state.source) {
+        Next(chunk, source) ->
+          delimited_pull(
+            Delimited(
+              ..state,
+              source:,
+              unscanned: chunk,
+              has_seen_input: state.has_seen_input
+                || bit_array.byte_size(chunk) > 0,
+            ),
+          )
+        Done ->
+          case state.has_seen_input {
+            True ->
+              Next(
+                bit_array.concat(list.reverse(list.append(recent, state.frame))),
+                core.empty(),
+              )
             False -> Done
           }
-        False ->
-          case datastream.pull(source) {
-            Next(chunk, source_rest) ->
-              delimited_pull(
-                source_rest,
-                bit_array.append(buffer, chunk),
-                delimiter,
-                False,
-                has_seen_input || bit_array.byte_size(chunk) > 0,
-                resume_scan_offset(buffer, delimiter),
-              )
-            Done ->
-              delimited_pull(
-                source,
-                buffer,
-                delimiter,
-                True,
-                has_seen_input,
-                scan_from,
-              )
-          }
       }
+    }
   }
-}
-
-/// Where to resume scanning the new (longer) buffer after appending a
-/// fresh chunk. The previous full scan covered everything except the
-/// last `delim_size - 1` bytes, since a delimiter shorter than that
-/// would already have matched. Backing off by `delim_size - 1` is
-/// enough to catch a delimiter that straddles the chunk boundary.
-fn resume_scan_offset(buffer: BitArray, delimiter: BitArray) -> Int {
-  let delim_size = bit_array.byte_size(delimiter)
-  let buffer_size = bit_array.byte_size(buffer)
-  case buffer_size - delim_size + 1 {
-    n if n > 0 -> n
-    _ -> 0
-  }
-}
-
-fn delimited_drained() -> Stream(BitArray) {
-  datastream.make(pull: fn() { Done }, close: fn() { Nil })
 }
 
 fn find_delimiter(
@@ -520,9 +491,9 @@ pub fn fixed_size(
   over stream: Stream(BitArray),
   size size: Int,
 ) -> Stream(BitArray) {
-  case size >= 1 {
-    True -> fixed_size_active(stream, <<>>, size, False)
-    False -> panic as "datastream/binary.fixed_size: size must be >= 1"
+  case fixed_size_checked(over: stream, size: size) {
+    Ok(framed) -> framed
+    Error(_) -> panic as "datastream/binary.fixed_size: size must be >= 1"
   }
 }
 
@@ -541,53 +512,43 @@ pub fn fixed_size_checked(
   size size: Int,
 ) -> Result(Stream(BitArray), BinaryArgError) {
   case size >= 1 {
-    True -> Ok(fixed_size_active(stream, <<>>, size, False))
+    True -> Ok(fixed_size_active(stream, nothing_buffered, size))
     False -> Error(NotPositiveSize(function: "fixed_size", given: size))
   }
 }
 
 fn fixed_size_active(
   source: Stream(BitArray),
-  buffer: BitArray,
+  buffered: Buffered,
   size: Int,
-  source_drained: Bool,
 ) -> Stream(BitArray) {
   datastream.make(
-    pull: fn() { fixed_size_pull(source, buffer, size, source_drained) },
-    close: fn() { maybe_close(source, source_drained) },
+    pull: fn() { fixed_size_pull(source, buffered, size) },
+    close: fn() { datastream.close(source) },
   )
 }
 
 fn fixed_size_pull(
   source: Stream(BitArray),
-  buffer: BitArray,
+  buffered: Buffered,
   size: Int,
-  source_drained: Bool,
 ) -> Step(BitArray, Stream(BitArray)) {
-  case bit_array.byte_size(buffer) >= size {
-    True ->
-      case
-        bit_array.slice(buffer, 0, size),
-        bit_array.slice(buffer, size, bit_array.byte_size(buffer) - size)
-      {
-        Ok(frame), Ok(rest) ->
-          Next(frame, fixed_size_active(source, rest, size, source_drained))
-        _, _ -> Done
+  case buffered.size >= size {
+    True -> {
+      case take_bytes(buffered, size) {
+        Ok(#(frame, buffered)) ->
+          Next(frame, fixed_size_active(source, buffered, size))
+        Error(_) -> {
+          datastream.close(source)
+          Done
+        }
       }
+    }
     False ->
-      case source_drained {
-        True -> Done
-        False ->
-          case datastream.pull(source) {
-            Next(chunk, source_rest) ->
-              fixed_size_pull(
-                source_rest,
-                bit_array.append(buffer, chunk),
-                size,
-                False,
-              )
-            Done -> fixed_size_pull(source, buffer, size, True)
-          }
+      case refill(source, buffered) {
+        Some(#(source, buffered)) -> fixed_size_pull(source, buffered, size)
+        // The trailing partial frame, if any, is discarded.
+        None -> Done
       }
   }
 }

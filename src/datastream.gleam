@@ -24,10 +24,10 @@
 ////   `binary.length_prefixed`'s `prefix_size`) MUST be `>= 1`
 ////   (and `prefix_size` is further restricted to `{1, 2, 4, 8}`).
 //// - A "count" argument that says how many elements to take or
-////   drop (`stream.take`, `stream.drop`) MUST be `>= 0`. The `0`
-////   case has a single mathematically natural answer
-////   (the empty stream / the identity respectively) and is
-////   accepted; negative counts are programmer error.
+////   drop (`stream.take`, `stream.drop`) is the exception: a
+////   negative count is treated as `0`, like `gleam/list.take` and
+////   `gleam/list.drop`. `stream.take_checked` and
+////   `stream.drop_checked` reject it with an `Error` instead.
 ////
 //// Every violation is a programmer error: the only sensible response
 //// is to crash so a bogus value cannot quietly produce surprising

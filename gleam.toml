@@ -3,7 +3,7 @@ version = "0.20.0"
 description = "Compositional, resource-safe streams for Gleam — runs on Erlang and JavaScript targets"
 licences = ["MIT"]
 repository = { type = "github", user = "nao1215", repo = "datastream" }
-internal_modules = ["datastream/internal/**"]
+internal_modules = ["datastream/internal/*", "datastream/erlang/internal/*"]
 links = [
   { title = "Repository", href = "https://github.com/nao1215/datastream" },
   { title = "Documentation", href = "https://hexdocs.pm/datastream" },
@@ -77,9 +77,9 @@ thrown_away_error = "off"
   "short_variable_name",
   "unused_exports",
 ]
-# `binary.length_prefixed` and `binary.fixed_size` reject malformed
-# arguments with `panic` at construction time per the spec (#16): the
-# only sensible response to a programmer error like `prefix_size = 3`
+# `binary.length_prefixed`, `binary.fixed_size` and `binary.delimited`
+# reject malformed arguments with `panic` at construction time per the
+# spec (#16): the only sensible response to a programmer error like `prefix_size = 3`
 # is to crash, so callers can't quietly trust a bogus framing.
 "src/datastream/binary.gleam" = [
   "avoid_panic",
@@ -91,11 +91,10 @@ thrown_away_error = "off"
 "src/datastream/source.gleam" = [
   "avoid_panic",
 ]
-# `stream.take`, `stream.drop`, and `stream.chunks_of` reject
-# nonsensical count / size arguments with `panic` per the
-# datastream module-level invalid-argument policy unified in #145
-# (negative counts, sub-1 chunk sizes). Silent normalisation hides
-# programmer error behind plausible-looking output.
+# `stream.buffer`, `stream.chunks_of` and `stream.broadcast_bounded`
+# reject nonsensical size arguments with `panic` per the datastream
+# module-level invalid-argument policy (#145). Negative `take` /
+# `drop` counts are treated as 0 instead.
 "src/datastream/stream.gleam" = [
   "avoid_panic",
 ]

@@ -57,7 +57,7 @@ pub fn to_async_iterable_closes_resource_on_exhaustion_test() {
     bump(close_count)
   })
   |> js_async.to_async_iterable
-  |> assert_exhaustion_closes_once(fn() { ref.get(close_count) })
+  |> assert_exhaustion_closes_once(fn() { read(close_count) })
 }
 
 @target(javascript)
@@ -70,7 +70,7 @@ pub fn to_async_iterable_closes_resource_on_early_return_test() {
     close: fn(_) { bump(close_count) },
   )
   |> js_async.to_async_iterable
-  |> assert_return_closes_once(fn() { ref.get(close_count) })
+  |> assert_return_closes_once(fn() { read(close_count) })
 }
 
 @target(javascript)
@@ -83,5 +83,13 @@ fn finite_counter(state: Int) -> datastream.Step(Int, Int) {
 
 @target(javascript)
 fn bump(counter: Ref(Int)) -> Nil {
-  ref.set(counter, ref.get(counter) + 1)
+  ref.set(counter, read(counter) + 1)
+}
+
+@target(javascript)
+fn read(cell: ref.Ref(a)) -> a {
+  case ref.get(cell) {
+    Ok(value) -> value
+    Error(_) -> panic as "test ref was deleted"
+  }
 }

@@ -1,6 +1,9 @@
 import datastream.{Done, Next}
 import datastream/binary
 import datastream/fold
+import datastream/internal/ref
+import datastream/source
+import datastream/stream
 import gleam/list
 import gleeunit
 import gleeunit/should
@@ -290,6 +293,18 @@ pub fn fixed_size_panics_on_negative_size_test() {
   did_panic |> should.be_true
 }
 
+@target(erlang)
+pub fn delimited_panics_on_empty_delimiter_test() {
+  // An empty delimiter matches at every position without consuming
+  // input, so the stream would yield empty frames forever.
+  let did_panic =
+    panicked(fn() {
+      let _result = binary.delimited(from_list([<<1, 2, 3>>]), on: <<>>)
+      Nil
+    })
+  did_panic |> should.be_true
+}
+
 // --- checked variants (#189) -------------------------------------------
 
 pub fn length_prefixed_checked_ok_decodes_one_byte_prefix_test() {
@@ -416,4 +431,108 @@ pub fn delimited_keeps_the_empty_frame_after_a_trailing_delimiter_test() {
   |> binary.delimited(on: <<10>>)
   |> fold.to_list
   |> should.equal([<<1>>, <<>>])
+}
+
+// --- length_prefixed ends the stream after FrameTooLarge --------------------
+
+pub fn length_prefixed_ends_after_frame_too_large_across_chunks_test() {
+  // Once a prefix claims too many bytes the framing is lost, so the
+  // bytes after it must not be read as new prefixes.
+  from_list([<<5>>, <<1, 2, 3, 4, 5>>, <<1, 9>>])
+  |> binary.length_prefixed_with(prefix_size: 1, max_frame_size: 2)
+  |> fold.to_list
+  |> should.equal([Error(binary.FrameTooLarge(claimed: 5, max: 2))])
+}
+
+pub fn length_prefixed_ends_after_frame_too_large_in_one_chunk_test() {
+  from_list([<<5, 1, 2, 3, 4, 5, 1, 9>>])
+  |> binary.length_prefixed_with(prefix_size: 1, max_frame_size: 2)
+  |> fold.to_list
+  |> should.equal([Error(binary.FrameTooLarge(claimed: 5, max: 2))])
+}
+
+pub fn length_prefixed_closes_upstream_after_frame_too_large_test() {
+  let closed = ref.new(0)
+  source.resource(
+    open: fn() { [<<5, 1, 2>>, <<3, 4, 5>>] },
+    next: fn(chunks) {
+      case chunks {
+        [] -> Done
+        [chunk, ..rest] -> Next(chunk, rest)
+      }
+    },
+    close: fn(_) { ref.set(closed, read(closed) + 1) },
+  )
+  |> binary.length_prefixed_with(prefix_size: 1, max_frame_size: 2)
+  |> fold.to_list
+  |> should.equal([Error(binary.FrameTooLarge(claimed: 5, max: 2))])
+  read(closed) |> should.equal(1)
+}
+
+pub fn length_prefixed_frames_split_over_many_chunks_test() {
+  from_list([<<0>>, <<3, 1>>, <<2>>, <<3, 0, 1>>, <<>>, <<9>>, <<0, 2, 7>>])
+  |> binary.length_prefixed(prefix_size: 2)
+  |> fold.to_list
+  |> should.equal([
+    Ok(<<1, 2, 3>>),
+    Ok(<<9>>),
+    Error(binary.IncompleteFrame(expected: 2, got: 1)),
+  ])
+}
+
+pub fn fixed_size_frames_split_over_many_chunks_test() {
+  from_list([<<1>>, <<2, 3>>, <<>>, <<4, 5, 6, 7>>, <<8>>])
+  |> binary.fixed_size(size: 3)
+  |> fold.to_list
+  |> should.equal([<<1, 2, 3>>, <<4, 5, 6>>])
+}
+
+pub fn delimited_delimiter_split_over_many_chunks_test() {
+  from_list([<<1, 0>>, <<0>>, <<0, 2, 3, 0>>, <<>>, <<0, 0>>, <<0>>, <<4>>])
+  |> binary.delimited(on: <<0, 0, 0>>)
+  |> fold.to_list
+  |> should.equal([<<1>>, <<2, 3>>, <<0, 4>>])
+}
+
+fn read(cell: ref.Ref(a)) -> a {
+  case ref.get(cell) {
+    Ok(value) -> value
+    Error(_) -> panic as "test ref was deleted"
+  }
+}
+
+// --- framers end on input that is not byte-aligned ----------------------------
+
+pub fn fixed_size_ends_on_non_byte_aligned_chunks_test() {
+  // `take` keeps a regression from hanging the suite.
+  from_list([<<1:4>>, <<2:4>>])
+  |> binary.fixed_size(size: 1)
+  |> stream.take(up_to: 10)
+  |> fold.to_list
+  |> should.equal([])
+}
+
+pub fn length_prefixed_ends_on_a_non_byte_aligned_chunk_test() {
+  from_list([<<1:4>>])
+  |> binary.length_prefixed(prefix_size: 1)
+  |> stream.take(up_to: 10)
+  |> fold.to_list
+  |> should.equal([])
+}
+
+pub fn delimited_ends_on_a_non_byte_aligned_chunk_test() {
+  from_list([<<1:4>>])
+  |> binary.delimited(on: <<0>>)
+  |> stream.take(up_to: 10)
+  |> fold.count
+  |> fn(count) { count <= 1 }
+  |> should.be_true
+}
+
+pub fn bytes_ends_on_a_non_byte_aligned_chunk_test() {
+  from_list([<<1:4>>])
+  |> binary.bytes
+  |> stream.take(up_to: 10)
+  |> fold.to_list
+  |> should.equal([])
 }

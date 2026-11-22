@@ -278,7 +278,7 @@ These run in CI from `test/examples/`.
 
 ## Checked constructors
 
-Constructors panic on invalid numeric arguments such as a negative `take`.
+Constructors panic on invalid numeric arguments such as `chunks_of(into: 0)`.
 When the value comes from user input or config, use the `*_checked`
 variant, which returns a `Result`:
 

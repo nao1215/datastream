@@ -16,13 +16,14 @@
 //// on every terminal call: there is no implicit caching.
 
 import datastream.{type Step, type Stream, Done, Next}
+import datastream/internal/core
 import gleam/bit_array
 import gleam/dict.{type Dict}
 import gleam/option.{type Option, None, Some}
 
 /// A stream that yields no elements.
 pub fn empty() -> Stream(a) {
-  datastream.unfold(from: Nil, with: fn(_) { Done })
+  core.empty()
 }
 
 /// A stream that yields exactly one element and then stops.

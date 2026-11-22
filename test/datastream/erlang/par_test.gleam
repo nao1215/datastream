@@ -7,6 +7,9 @@ import datastream
 import datastream/erlang/internal/event_log
 
 @target(erlang)
+import datastream/erlang/internal/watchdog
+
+@target(erlang)
 import datastream/erlang/par
 
 @target(erlang)
@@ -781,62 +784,36 @@ fn collect_three(subj: process.Subject(Int), acc: List(Int)) -> List(Int) {
   }
 }
 
-// --- panic-in-f terminates the stream with Done (#156) -------------------
+// --- a panic in f reaches the caller ------------------------------------
 //
-// Worker panics are detected via process monitors. When a worker
-// crashes, the coordinator receives a DOWN message and halts the
-// stream instead of deadlocking.
+// Worker crashes are detected via process monitors. The coordinator
+// closes the upstream, stops the other workers and re-raises the crash
+// in the process pulling the stream, like `stream.map` would.
 
 @target(erlang)
-fn completes_within(thunk: fn() -> Nil, timeout_ms: Int) -> Bool {
-  let done = process.new_subject()
-  let _pid =
-    process.spawn_unlinked(fn() {
-      thunk()
-      process.send(done, Nil)
-    })
-  case process.receive(from: done, within: timeout_ms) {
-    Ok(_) -> True
-    Error(_) -> False
-  }
+pub fn map_unordered_with_propagates_a_panic_in_f_test() {
+  watchdog.run(within: 2000, running: fn() {
+    source.from_list([1, 2, 3])
+    |> par.map_unordered_with(
+      with: fn(_x) { panic as "boom" },
+      max_workers: 2,
+      max_buffer: 4,
+    )
+    |> fold.to_list
+  })
+  |> should.equal(watchdog.Crashed)
 }
 
 @target(erlang)
-pub fn map_unordered_with_halts_when_f_panics_test() {
-  let completed =
-    completes_within(
-      fn() {
-        let _result =
-          source.from_list([1, 2, 3])
-          |> par.map_unordered_with(
-            with: fn(_x) { panic as "boom" },
-            max_workers: 2,
-            max_buffer: 4,
-          )
-          |> fold.to_list
-        Nil
-      },
-      2000,
+pub fn map_ordered_with_propagates_a_panic_in_f_test() {
+  watchdog.run(within: 2000, running: fn() {
+    source.from_list([1, 2, 3])
+    |> par.map_ordered_with(
+      with: fn(_x) { panic as "boom" },
+      max_workers: 2,
+      max_buffer: 4,
     )
-  completed |> should.be_true
-}
-
-@target(erlang)
-pub fn map_ordered_with_halts_when_f_panics_test() {
-  let completed =
-    completes_within(
-      fn() {
-        let _result =
-          source.from_list([1, 2, 3])
-          |> par.map_ordered_with(
-            with: fn(_x) { panic as "boom" },
-            max_workers: 2,
-            max_buffer: 4,
-          )
-          |> fold.to_list
-        Nil
-      },
-      2000,
-    )
-  completed |> should.be_true
+    |> fold.to_list
+  })
+  |> should.equal(watchdog.Crashed)
 }
