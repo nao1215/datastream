@@ -1,6 +1,5 @@
 import datastream.{Done, Next}
 import gleeunit
-import gleeunit/should
 
 pub fn main() -> Nil {
   gleeunit.main()
@@ -15,14 +14,13 @@ pub fn unfold_yields_one_then_done_test() {
       }
     })
 
-  let assert Next(1, rest) = datastream.pull(stream)
-  datastream.pull(rest) |> should.equal(Done)
+  assert datastream.to_list(stream) == [1]
 }
 
 pub fn unfold_done_immediately_test() {
   let stream = datastream.unfold(from: Nil, with: fn(_) { Done })
 
-  datastream.pull(stream) |> should.equal(Done)
+  assert datastream.to_list(stream) == []
 }
 
 pub fn unfold_yields_two_then_done_test() {
@@ -35,9 +33,7 @@ pub fn unfold_yields_two_then_done_test() {
       }
     })
 
-  let assert Next("a", after_a) = datastream.pull(stream)
-  let assert Next("b", after_b) = datastream.pull(after_a)
-  datastream.pull(after_b) |> should.equal(Done)
+  assert datastream.to_list(stream) == ["a", "b"]
 }
 
 pub fn pull_re_runs_from_source_each_time_test() {
@@ -50,8 +46,8 @@ pub fn pull_re_runs_from_source_each_time_test() {
       }
     })
 
-  let assert Next(1, _) = datastream.pull(stream)
-  let assert Next(1, _) = datastream.pull(stream)
+  assert datastream.first(stream) == Ok(1)
+  assert datastream.first(stream) == Ok(1)
 }
 
 pub fn unfold_state_is_private_to_constructed_stream_test() {
@@ -64,6 +60,5 @@ pub fn unfold_state_is_private_to_constructed_stream_test() {
       }
     })
 
-  let assert Next("x", rest) = datastream.pull(stream)
-  datastream.pull(rest) |> should.equal(Done)
+  assert datastream.to_list(stream) == ["x"]
 }

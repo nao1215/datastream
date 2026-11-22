@@ -10,18 +10,6 @@ import datastream
 import datastream/erlang/internal/event_log
 
 @target(erlang)
-import datastream/erlang/source as beam_source
-
-@target(erlang)
-import datastream/fold
-
-@target(erlang)
-import datastream/source
-
-@target(erlang)
-import datastream/stream
-
-@target(erlang)
 import gleam/erlang/process
 
 @target(erlang)
@@ -42,9 +30,9 @@ pub fn from_subject_receives_messages_in_order_test() {
     process.send(subject, 3)
   })
 
-  beam_source.from_subject(from: subject, while: fn() { True })
-  |> stream.take(up_to: 3)
-  |> fold.to_list
+  datastream.from_subject(from: subject, while: fn() { True })
+  |> datastream.take(up_to: 3)
+  |> datastream.to_list
   |> should.equal([1, 2, 3])
 }
 
@@ -52,8 +40,8 @@ pub fn from_subject_receives_messages_in_order_test() {
 pub fn from_subject_halts_when_keep_running_returns_false_test() {
   let subject = process.new_subject()
   // No messages ever sent; keep_running goes False on the first poll.
-  beam_source.from_subject(from: subject, while: fn() { False })
-  |> fold.to_list
+  datastream.from_subject(from: subject, while: fn() { False })
+  |> datastream.to_list
   |> should.equal([])
 }
 
@@ -71,23 +59,25 @@ pub fn bridge_subject_stream_materialises_in_owning_process_test() {
   // Drain the subject in this (owning) process via a take-bounded stream,
   // then bridge into a list-backed Stream that is process-safe.
   let bridged =
-    beam_source.from_subject(from: subject, while: fn() { True })
-    |> stream.take(up_to: 3)
-    |> beam_source.bridge_subject_stream
+    datastream.from_subject(from: subject, while: fn() { True })
+    |> datastream.take(up_to: 3)
+    |> datastream.to_list
+    |> datastream.from_list
 
   // The bridged stream survives composition with downstream combinators
-  // that may move pulls into worker processes (par.*, source.timeout).
+  // that may move pulls into worker processes (par.*, datastream.timeout).
   bridged
-  |> fold.to_list
+  |> datastream.to_list
   |> should.equal([10, 20, 30])
 }
 
 @target(erlang)
 pub fn bridge_subject_stream_preserves_empty_test() {
   let subject = process.new_subject()
-  beam_source.from_subject(from: subject, while: fn() { False })
-  |> beam_source.bridge_subject_stream
-  |> fold.to_list
+  datastream.from_subject(from: subject, while: fn() { False })
+  |> datastream.to_list
+  |> datastream.from_list
+  |> datastream.to_list
   |> should.equal([])
 }
 
@@ -96,9 +86,10 @@ pub fn bridge_subject_stream_preserves_empty_test() {
 @target(erlang)
 pub fn ticks_emits_three_monotonic_timestamps_test() {
   let stamps =
-    beam_source.ticks(every: 20)
-    |> stream.take(up_to: 3)
-    |> fold.to_list
+    datastream.ticks(every: 20)
+    |> should.be_ok
+    |> datastream.take(up_to: 3)
+    |> datastream.to_list
 
   case stamps {
     [a, b, c] -> {
@@ -111,9 +102,10 @@ pub fn ticks_emits_three_monotonic_timestamps_test() {
 
 @target(erlang)
 pub fn interval_emits_three_nils_test() {
-  beam_source.interval(every: 20)
-  |> stream.take(up_to: 3)
-  |> fold.to_list
+  datastream.interval(every: 20)
+  |> should.be_ok
+  |> datastream.take(up_to: 3)
+  |> datastream.to_list
   |> should.equal([Nil, Nil, Nil])
 }
 
@@ -121,9 +113,10 @@ pub fn interval_emits_three_nils_test() {
 
 @target(erlang)
 pub fn timeout_passes_fast_elements_through_test() {
-  source.from_list([1, 2, 3])
-  |> beam_source.timeout(within: 100)
-  |> fold.to_list
+  datastream.from_list([1, 2, 3])
+  |> datastream.timeout(within: 100)
+  |> should.be_ok
+  |> datastream.to_list
   |> should.equal([Ok(1), Ok(2), Ok(3)])
 }
 
@@ -132,14 +125,15 @@ pub fn timeout_emits_error_when_upstream_is_too_slow_test() {
   // upstream that sleeps 200ms before returning Done. The 50ms
   // deadline trips first.
   let slow =
-    source.unfold(from: Nil, with: fn(_) {
+    datastream.unfold(from: Nil, with: fn(_) {
       process.sleep(200)
       datastream.Done
     })
 
   slow
-  |> beam_source.timeout(within: 50)
-  |> fold.to_list
+  |> datastream.timeout(within: 50)
+  |> should.be_ok
+  |> datastream.to_list
   |> should.equal([Error(Nil)])
 }
 
@@ -149,9 +143,10 @@ pub fn timeout_take_early_exit_closes_upstream_test() {
   let upstream = event_log.counted_resource([1, 2, 3], named: "u", log: log)
 
   upstream
-  |> beam_source.timeout(within: 100)
-  |> stream.take(up_to: 1)
-  |> fold.to_list
+  |> datastream.timeout(within: 100)
+  |> should.be_ok
+  |> datastream.take(up_to: 1)
+  |> datastream.to_list
   |> should.equal([Ok(1)])
 
   process.sleep(50)
@@ -165,7 +160,7 @@ pub fn timeout_passes_periodic_fast_elements_through_test() {
   // Upstream emits three elements, 20ms apart. A 500ms deadline
   // never trips, so every element comes through as Ok and the stream
   // ends normally with Done.
-  source.unfold(from: 0, with: fn(s) {
+  datastream.unfold(from: 0, with: fn(s) {
     case s >= 3 {
       True -> datastream.Done
       False -> {
@@ -174,8 +169,9 @@ pub fn timeout_passes_periodic_fast_elements_through_test() {
       }
     }
   })
-  |> beam_source.timeout(within: 500)
-  |> fold.to_list
+  |> datastream.timeout(within: 500)
+  |> should.be_ok
+  |> datastream.to_list
   |> should.equal([Ok(0), Ok(1), Ok(2)])
 }
 
@@ -187,7 +183,7 @@ pub fn timeout_halts_stream_after_deadline_trip_test() {
   // requests more elements. `take(up_to: 5)` is satisfied by exactly
   // one Error(Nil), proving the single-shot halt contract.
   let slow =
-    source.unfold(from: 0, with: fn(s) {
+    datastream.unfold(from: 0, with: fn(s) {
       case s {
         0 -> {
           process.sleep(200)
@@ -198,8 +194,9 @@ pub fn timeout_halts_stream_after_deadline_trip_test() {
     })
 
   slow
-  |> beam_source.timeout(within: 50)
-  |> stream.take(up_to: 5)
-  |> fold.to_list
+  |> datastream.timeout(within: 50)
+  |> should.be_ok
+  |> datastream.take(up_to: 5)
+  |> datastream.to_list
   |> should.equal([Error(Nil)])
 }

@@ -8,20 +8,19 @@
 //// single `Validated(List(Row), Error)` so callers see *every*
 //// failure rather than only the first.
 ////
-//// Pair this with `fold.collect_result` / `fold.partition_result`
+//// Pair this with `datastream.collect_result` / `datastream.partition_result`
 //// from the surrounding library when short-circuit-on-first-error is
 //// the right behaviour — `Validated` is for the "show me everything
 //// that's wrong" path.
 ////
-//// Cross-target: `dataprep`, `fold.fold`, and the surrounding
+//// Cross-target: `dataprep`, `datastream.fold`, and the surrounding
 //// stream combinators all run on both the Erlang and JavaScript
 //// targets.
 
+import datastream
+
 import dataprep/non_empty_list
 import dataprep/validated.{type Validated, Invalid, Valid}
-import datastream/fold
-import datastream/source
-import datastream/stream
 import gleam/int
 import gleam/list
 import gleam/string
@@ -51,9 +50,9 @@ pub type RowError {
 pub fn run() -> Validated(List(Row), RowError) {
   let lines = ["1,100", "two,200", "3,abc", "4,400"]
 
-  source.from_list(lines)
-  |> stream.map(with: parse_row)
-  |> fold.fold(from: Valid([]), with: combine)
+  datastream.from_list(lines)
+  |> datastream.map(with: parse_row)
+  |> datastream.fold(from: Valid([]), with: combine)
   |> validated.map(list.reverse)
 }
 
@@ -105,9 +104,9 @@ pub fn dataprep_pipeline_example_collects_every_error_test() {
 pub fn dataprep_pipeline_example_all_valid_input_test() {
   let lines = ["1,10", "2,20", "3,30"]
   let result =
-    source.from_list(lines)
-    |> stream.map(with: parse_row)
-    |> fold.fold(from: Valid([]), with: combine)
+    datastream.from_list(lines)
+    |> datastream.map(with: parse_row)
+    |> datastream.fold(from: Valid([]), with: combine)
     |> validated.map(list.reverse)
   result
   |> should.equal(

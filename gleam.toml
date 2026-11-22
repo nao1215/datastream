@@ -1,29 +1,27 @@
 name = "datastream"
 version = "0.21.0"
-description = "Compositional, resource-safe streams for Gleam — runs on Erlang and JavaScript targets"
+description = "Lazy streams of values, text, and bytes with resource cleanup for Gleam"
 licences = ["MIT"]
 repository = { type = "github", user = "nao1215", repo = "datastream" }
-internal_modules = ["datastream/internal/*", "datastream/erlang/internal/*"]
+internal_modules = ["datastream/internal/*"]
 links = [
   { title = "Repository", href = "https://github.com/nao1215/datastream" },
   { title = "Documentation", href = "https://hexdocs.pm/datastream" },
   { title = "Changelog", href = "https://github.com/nao1215/datastream/blob/main/CHANGELOG.md" },
 ]
 
-# No `target` key on purpose: this library compiles for both the
-# Erlang and JavaScript targets. The cross-target core (`datastream`,
-# `datastream/source`, `datastream/stream`, `datastream/fold`,
-# `datastream/sink`, `datastream/chunk`, `datastream/text`,
-# `datastream/binary`) MUST run on both. Target-specific extension
-# modules (`datastream/erlang/*`, `datastream/javascript/*`) are
-# guarded so each target only sees the surface meant for it.
+# No target key: the synchronous core compiles for Erlang and JavaScript.
+# Target-specific functions in datastream use @target guards.
 gleam = ">= 1.14.0"
+
+[[documentation.pages]]
+title = "JavaScript"
+path = "javascript.html"
+source = "./doc/javascript.md"
 
 [dependencies]
 gleam_stdlib = ">= 0.44.0 and < 2.0.0"
-# `gleam_erlang` is required by the BEAM-only modules under
-# `datastream/erlang/*` (#18-#21). Every import of it is gated on
-# `@target(erlang)` so the JavaScript build never references it.
+# Erlang-only functions guard these imports with @target(erlang).
 gleam_erlang = ">= 1.3.0 and < 2.0.0"
 
 [dev-dependencies]
@@ -76,32 +74,4 @@ thrown_away_error = "off"
   "missing_type_annotation",
   "short_variable_name",
   "unused_exports",
-]
-# `binary.length_prefixed`, `binary.fixed_size` and `binary.delimited`
-# reject malformed arguments with `panic` at construction time per the
-# spec (#16): the only sensible response to a programmer error like `prefix_size = 3`
-# is to crash, so callers can't quietly trust a bogus framing.
-"src/datastream/binary.gleam" = [
-  "avoid_panic",
-]
-# `source.from_bit_array` rejects non-byte-aligned input at
-# construction time with `panic` per #144: silently dropping the
-# trailing sub-byte tail would be data loss the caller could not
-# observe, so a programmer error here must crash.
-"src/datastream/source.gleam" = [
-  "avoid_panic",
-]
-# `stream.buffer`, `stream.chunks_of` and `stream.broadcast_bounded`
-# reject nonsensical size arguments with `panic` per the datastream
-# module-level invalid-argument policy (#145). Negative `take` /
-# `drop` counts are treated as 0 instead.
-"src/datastream/stream.gleam" = [
-  "avoid_panic",
-]
-# `par.map_*` reject `max_workers < 1`, `max_buffer < 1`, and
-# `max_buffer < max_workers` for `map_ordered` with `panic` per
-# spec #20: the only sensible response to a programmer error like
-# `max_workers = 0` is to crash.
-"src/datastream/erlang/par.gleam" = [
-  "avoid_panic",
 ]

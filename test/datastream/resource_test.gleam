@@ -1,4 +1,4 @@
-//// Tests for `source.resource`'s close contract.
+//// Tests for `datastream.resource`'s close contract.
 ////
 //// Two flavours of test:
 ////
@@ -11,23 +11,13 @@
 ////   precise open / close counts and ordering.
 
 import datastream.{Done, Next}
-import datastream/fold
-import datastream/sink
-import datastream/source
-import datastream/stream
-import gleam/option
+
 import gleeunit/should
-
-@target(erlang)
-import datastream/binary
-
-@target(erlang)
-import datastream/text
 
 // --- cross-target: behavioural tests ---------------------------------------
 
 fn list_resource(elements: List(a)) {
-  source.resource(
+  datastream.resource(
     open: fn() { elements },
     next: fn(state) {
       case state {
@@ -40,36 +30,36 @@ fn list_resource(elements: List(a)) {
 }
 
 pub fn resource_to_list_yields_source_order_test() {
-  list_resource([1, 2, 3]) |> fold.to_list |> should.equal([1, 2, 3])
+  list_resource([1, 2, 3]) |> datastream.to_list |> should.equal([1, 2, 3])
 }
 
 pub fn resource_take_one_yields_first_element_test() {
   list_resource([1, 2, 3])
-  |> stream.take(up_to: 1)
-  |> fold.to_list
+  |> datastream.take(up_to: 1)
+  |> datastream.to_list
   |> should.equal([1])
 }
 
 pub fn resource_first_returns_some_head_test() {
-  list_resource([1, 2, 3]) |> fold.first |> should.equal(option.Some(1))
+  list_resource([1, 2, 3]) |> datastream.first |> should.equal(Ok(1))
 }
 
 pub fn resource_re_runs_open_per_terminal_test() {
   let s = list_resource([1, 2, 3])
-  fold.to_list(s) |> should.equal([1, 2, 3])
-  fold.to_list(s) |> should.equal([1, 2, 3])
+  datastream.to_list(s) |> should.equal([1, 2, 3])
+  datastream.to_list(s) |> should.equal([1, 2, 3])
 }
 
 pub fn resource_on_empty_yields_empty_test() {
-  list_resource([]) |> fold.to_list |> should.equal([])
+  list_resource([]) |> datastream.to_list |> should.equal([])
 }
 
 // --- cross-target: short-circuit and ordering tripwires --------------------
 
 pub fn map_passes_resource_through_test() {
   list_resource([1, 2, 3])
-  |> stream.map(with: fn(x) { x + 1 })
-  |> fold.to_list
+  |> datastream.map(with: fn(x) { x + 1 })
+  |> datastream.to_list
   |> should.equal([2, 3, 4])
 }
 
@@ -77,7 +67,7 @@ pub fn try_each_short_circuits_and_does_not_pull_past_error_test() {
   // After try_each returns Error("stop") on element 3, element 4 must
   // not be pulled (which would trip the panic).
   let s =
-    source.resource(
+    datastream.resource(
       open: fn() { 1 },
       next: fn(state) {
         case state {
@@ -89,7 +79,7 @@ pub fn try_each_short_circuits_and_does_not_pull_past_error_test() {
     )
 
   s
-  |> sink.try_each(with: fn(x) {
+  |> datastream.try_each(with: fn(x) {
     case x {
       3 -> Error("stop")
       4 -> panic as "try_each must not pull element 4 after error on 3"
@@ -104,21 +94,21 @@ pub fn append_does_not_open_second_when_first_short_circuits_test() {
   // the take(2) early-exit on the (infinite) first, the test would
   // panic.
   let infinite_first =
-    source.resource(
+    datastream.resource(
       open: fn() { 1 },
       next: fn(state) { Next(element: state, state: state + 1) },
       close: fn(_) { Nil },
     )
   let panicking_second =
-    source.resource(
+    datastream.resource(
       open: fn() { panic as "second resource opened despite take(2) early-exit" },
       next: fn(_) { Done },
       close: fn(_) { Nil },
     )
 
-  stream.append(infinite_first, panicking_second)
-  |> stream.take(up_to: 2)
-  |> fold.to_list
+  datastream.append(infinite_first, panicking_second)
+  |> datastream.take(up_to: 2)
+  |> datastream.to_list
   |> should.equal([1, 2])
 }
 
@@ -189,7 +179,7 @@ fn reverse_events_loop(
 
 @target(erlang)
 fn logged_resource(elements: List(a), log_key: String, name: String) {
-  source.resource(
+  datastream.resource(
     open: fn() {
       record(log_key, "open:" <> name)
       elements
@@ -209,7 +199,7 @@ fn logged_resource(elements: List(a), log_key: String, name: String) {
 
 @target(erlang)
 fn counted_resource(elements: List(a), opens_key: String, closes_key: String) {
-  source.resource(
+  datastream.resource(
     open: fn() {
       bump(opens_key)
       elements
@@ -232,7 +222,7 @@ pub fn resource_normal_end_closes_once_test() {
   reset("c12_open_a")
   reset("c12_close_a")
   counted_resource([1, 2, 3], "c12_open_a", "c12_close_a")
-  |> fold.to_list
+  |> datastream.to_list
   |> should.equal([1, 2, 3])
   get_dict("c12_open_a") |> should.equal(1)
   get_dict("c12_close_a") |> should.equal(1)
@@ -243,8 +233,8 @@ pub fn resource_take_early_exit_closes_once_test() {
   reset("c12_open_b")
   reset("c12_close_b")
   counted_resource([1, 2, 3], "c12_open_b", "c12_close_b")
-  |> stream.take(up_to: 1)
-  |> fold.to_list
+  |> datastream.take(up_to: 1)
+  |> datastream.to_list
   |> should.equal([1])
   get_dict("c12_open_b") |> should.equal(1)
   get_dict("c12_close_b") |> should.equal(1)
@@ -255,8 +245,8 @@ pub fn resource_first_closes_once_test() {
   reset("c12_open_c")
   reset("c12_close_c")
   counted_resource([1, 2, 3], "c12_open_c", "c12_close_c")
-  |> fold.first
-  |> should.equal(option.Some(1))
+  |> datastream.first
+  |> should.equal(Ok(1))
   get_dict("c12_open_c") |> should.equal(1)
   get_dict("c12_close_c") |> should.equal(1)
 }
@@ -266,8 +256,8 @@ pub fn resource_each_terminal_re_opens_test() {
   reset("c12_open_d")
   reset("c12_close_d")
   let s = counted_resource([1, 2, 3], "c12_open_d", "c12_close_d")
-  fold.to_list(s) |> should.equal([1, 2, 3])
-  fold.to_list(s) |> should.equal([1, 2, 3])
+  datastream.to_list(s) |> should.equal([1, 2, 3])
+  datastream.to_list(s) |> should.equal([1, 2, 3])
   get_dict("c12_open_d") |> should.equal(2)
   get_dict("c12_close_d") |> should.equal(2)
 }
@@ -277,7 +267,7 @@ pub fn resource_empty_closes_once_test() {
   reset("c12_open_e")
   reset("c12_close_e")
   counted_resource([], "c12_open_e", "c12_close_e")
-  |> fold.to_list
+  |> datastream.to_list
   |> should.equal([])
   get_dict("c12_open_e") |> should.equal(1)
   get_dict("c12_close_e") |> should.equal(1)
@@ -310,8 +300,8 @@ pub fn resource_flat_map_inner_then_outer_close_test() {
     counted_resource([inner_a, inner_b], "c12_open_outer", "c12_close_outer")
 
   outer
-  |> stream.flat_map(with: fn(s) { s })
-  |> fold.to_list
+  |> datastream.flat_map(with: fn(s) { s })
+  |> datastream.to_list
   |> should.equal([1, 2, 3, 4])
 
   get_dict("c12_open_outer") |> should.equal(1)
@@ -339,9 +329,9 @@ pub fn resource_flat_map_take_does_not_open_second_inner_test() {
     counted_resource([inner_a, inner_b], "c12_open_outer2", "c12_close_outer2")
 
   outer
-  |> stream.flat_map(with: fn(s) { s })
-  |> stream.take(up_to: 1)
-  |> fold.to_list
+  |> datastream.flat_map(with: fn(s) { s })
+  |> datastream.take(up_to: 1)
+  |> datastream.to_list
   |> should.equal([1])
 
   get_dict("c12_open_inner2_a") |> should.equal(1)
@@ -360,7 +350,9 @@ pub fn resource_append_left_closed_before_right_opens_test() {
   let left = counted_resource([1, 2], "c12_open_l", "c12_close_l")
   let right = counted_resource([3, 4], "c12_open_r", "c12_close_r")
 
-  stream.append(left, right) |> fold.to_list |> should.equal([1, 2, 3, 4])
+  datastream.append(left, right)
+  |> datastream.to_list
+  |> should.equal([1, 2, 3, 4])
 
   get_dict("c12_open_l") |> should.equal(1)
   get_dict("c12_close_l") |> should.equal(1)
@@ -378,8 +370,8 @@ pub fn resource_zip_closes_both_test() {
   let left = counted_resource([1, 2], "c12_open_zl", "c12_close_zl")
   let right = counted_resource([10, 20, 30], "c12_open_zr", "c12_close_zr")
 
-  stream.zip(left, right)
-  |> fold.to_list
+  datastream.zip(left, right)
+  |> datastream.to_list
   |> should.equal([#(1, 10), #(2, 20)])
 
   get_dict("c12_open_zl") |> should.equal(1)
@@ -394,7 +386,7 @@ pub fn resource_try_each_error_closes_once_test() {
   reset("c12_close_te")
 
   counted_resource([1, 2, 3, 4], "c12_open_te", "c12_close_te")
-  |> sink.try_each(with: fn(x) {
+  |> datastream.try_each(with: fn(x) {
     case x < 3 {
       True -> Ok(Nil)
       False -> Error("stop")
@@ -416,9 +408,9 @@ pub fn resource_flat_map_closes_inner_before_outer_on_early_exit_test() {
   let outer = logged_resource([inner], "c12_log_fmt_te", "outer")
 
   outer
-  |> stream.flat_map(with: fn(s) { s })
-  |> stream.take(up_to: 1)
-  |> fold.to_list
+  |> datastream.flat_map(with: fn(s) { s })
+  |> datastream.take(up_to: 1)
+  |> datastream.to_list
   |> should.equal([1])
 
   events("c12_log_fmt_te")
@@ -434,9 +426,9 @@ pub fn resource_flat_map_take_does_not_open_second_inner_ordering_test() {
   let outer = logged_resource([inner_a, inner_b], "c12_log_fmt_take", "outer")
 
   outer
-  |> stream.flat_map(with: fn(s) { s })
-  |> stream.take(up_to: 1)
-  |> fold.to_list
+  |> datastream.flat_map(with: fn(s) { s })
+  |> datastream.take(up_to: 1)
+  |> datastream.to_list
   |> should.equal([1])
 
   // outer opened, then inner_a; on take(1) the active inner_a closes
@@ -452,7 +444,9 @@ pub fn resource_append_left_fully_closes_before_right_opens_test() {
   let left = logged_resource([1, 2], "c12_log_append", "left")
   let right = logged_resource([3, 4], "c12_log_append", "right")
 
-  stream.append(left, right) |> fold.to_list |> should.equal([1, 2, 3, 4])
+  datastream.append(left, right)
+  |> datastream.to_list
+  |> should.equal([1, 2, 3, 4])
 
   // left must close before right opens.
   events("c12_log_append")
@@ -464,7 +458,7 @@ pub fn resource_append_take_does_not_open_right_test() {
   reset_events("c12_log_append_take")
 
   let left =
-    source.resource(
+    datastream.resource(
       open: fn() {
         record("c12_log_append_take", "open:left")
         1
@@ -477,9 +471,9 @@ pub fn resource_append_take_does_not_open_right_test() {
     )
   let right = logged_resource([10, 20], "c12_log_append_take", "right")
 
-  stream.append(left, right)
-  |> stream.take(up_to: 2)
-  |> fold.to_list
+  datastream.append(left, right)
+  |> datastream.take(up_to: 2)
+  |> datastream.to_list
   |> should.equal([1, 2])
 
   events("c12_log_append_take")
@@ -493,8 +487,8 @@ pub fn resource_zip_closes_right_then_left_test() {
   let left = logged_resource([1, 2], "c12_log_zip", "left")
   let right = logged_resource([10, 20, 30], "c12_log_zip", "right")
 
-  stream.zip(left, right)
-  |> fold.to_list
+  datastream.zip(left, right)
+  |> datastream.to_list
   |> should.equal([#(1, 10), #(2, 20)])
 
   // Order in the log: opens happen during the first zip pull (left
@@ -512,8 +506,8 @@ pub fn resource_fold_find_closes_once_on_match_test() {
   reset("c12_open_find")
   reset("c12_close_find")
   counted_resource([1, 2, 3, 4], "c12_open_find", "c12_close_find")
-  |> fold.find(satisfying: fn(x) { x == 2 })
-  |> should.equal(option.Some(2))
+  |> datastream.find(satisfying: fn(x) { x == 2 })
+  |> should.equal(Ok(2))
   get_dict("c12_open_find") |> should.equal(1)
   get_dict("c12_close_find") |> should.equal(1)
 }
@@ -523,7 +517,7 @@ pub fn resource_fold_any_closes_once_on_first_true_test() {
   reset("c12_open_any")
   reset("c12_close_any")
   counted_resource([1, 2, 3, 4], "c12_open_any", "c12_close_any")
-  |> fold.any(satisfying: fn(x) { x >= 2 })
+  |> datastream.any(satisfying: fn(x) { x >= 2 })
   |> should.equal(True)
   get_dict("c12_open_any") |> should.equal(1)
   get_dict("c12_close_any") |> should.equal(1)
@@ -534,7 +528,7 @@ pub fn resource_fold_all_closes_once_on_first_false_test() {
   reset("c12_open_all")
   reset("c12_close_all")
   counted_resource([1, 2, 3, 4], "c12_open_all", "c12_close_all")
-  |> fold.all(satisfying: fn(x) { x < 2 })
+  |> datastream.all(satisfying: fn(x) { x < 2 })
   |> should.equal(False)
   get_dict("c12_open_all") |> should.equal(1)
   get_dict("c12_close_all") |> should.equal(1)
@@ -549,7 +543,7 @@ pub fn resource_fold_collect_result_closes_once_on_first_error_test() {
     "c12_open_cr",
     "c12_close_cr",
   )
-  |> fold.collect_result
+  |> datastream.collect_result
   |> should.equal(Error("bad"))
   get_dict("c12_open_cr") |> should.equal(1)
   get_dict("c12_close_cr") |> should.equal(1)
@@ -571,9 +565,9 @@ pub fn lines_over_resource_take_one_closes_once_test() {
     "c14_open_lines_take",
     "c14_close_lines_take",
   )
-  |> text.lines
-  |> stream.take(up_to: 1)
-  |> fold.to_list
+  |> datastream.lines
+  |> datastream.take(up_to: 1)
+  |> datastream.to_list
   |> should.equal(["hello"])
   get_dict("c14_open_lines_take") |> should.equal(1)
   get_dict("c14_close_lines_take") |> should.equal(1)
@@ -588,9 +582,9 @@ pub fn lines_over_resource_fold_find_closes_once_test() {
     "c14_open_lines_find",
     "c14_close_lines_find",
   )
-  |> text.lines
-  |> fold.find(satisfying: fn(line) { line == "beta" })
-  |> should.equal(option.Some("beta"))
+  |> datastream.lines
+  |> datastream.find(satisfying: fn(line) { line == "beta" })
+  |> should.equal(Ok("beta"))
   get_dict("c14_open_lines_find") |> should.equal(1)
   get_dict("c14_close_lines_find") |> should.equal(1)
 }
@@ -604,9 +598,11 @@ pub fn delimited_over_resource_take_one_closes_once_test() {
     "c14_open_delim",
     "c14_close_delim",
   )
-  |> binary.delimited(on: <<0>>)
-  |> stream.take(up_to: 1)
-  |> fold.to_list
+  |> datastream.delimited(on: <<0>>)
+  |> should.be_ok
+  |> datastream.map(with: should.be_ok)
+  |> datastream.take(up_to: 1)
+  |> datastream.to_list
   |> should.equal([<<65>>])
   get_dict("c14_open_delim") |> should.equal(1)
   get_dict("c14_close_delim") |> should.equal(1)
@@ -617,9 +613,10 @@ pub fn length_prefixed_over_resource_take_one_closes_once_test() {
   reset("c14_open_lp")
   reset("c14_close_lp")
   counted_resource([<<2, 65, 66, 1, 67>>], "c14_open_lp", "c14_close_lp")
-  |> binary.length_prefixed(prefix_size: 1)
-  |> stream.take(up_to: 1)
-  |> fold.to_list
+  |> datastream.length_prefixed(prefix_size: 1, max_frame_size: 16_777_216)
+  |> should.be_ok
+  |> datastream.take(up_to: 1)
+  |> datastream.to_list
   |> should.equal([Ok(<<65, 66>>)])
   get_dict("c14_open_lp") |> should.equal(1)
   get_dict("c14_close_lp") |> should.equal(1)
@@ -630,9 +627,11 @@ pub fn fixed_size_over_resource_take_one_closes_once_test() {
   reset("c14_open_fs")
   reset("c14_close_fs")
   counted_resource([<<1, 2, 3, 4, 5, 6>>], "c14_open_fs", "c14_close_fs")
-  |> binary.fixed_size(size: 2)
-  |> stream.take(up_to: 1)
-  |> fold.to_list
+  |> datastream.fixed_size(size: 2)
+  |> should.be_ok
+  |> datastream.map(with: should.be_ok)
+  |> datastream.take(up_to: 1)
+  |> datastream.to_list
   |> should.equal([<<1, 2>>])
   get_dict("c14_open_fs") |> should.equal(1)
   get_dict("c14_close_fs") |> should.equal(1)

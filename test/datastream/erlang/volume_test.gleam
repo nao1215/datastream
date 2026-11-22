@@ -7,13 +7,7 @@
 //// OOM the BEAM node.
 
 @target(erlang)
-import datastream/erlang/par
-
-@target(erlang)
-import datastream/fold
-
-@target(erlang)
-import datastream/source
+import datastream
 
 @target(erlang)
 import gleeunit/should
@@ -24,8 +18,13 @@ pub const beam_only_marker: String = "datastream/erlang/volume_test is BEAM-only
 
 @target(erlang)
 pub fn par_map_unordered_ten_thousand_test() {
-  source.range(from: 0, to: 10_000)
-  |> par.map_unordered(with: fn(x) { x * 2 })
-  |> fold.count
+  datastream.range(from: 0, to: 10_000)
+  |> datastream.map_unordered(
+    with: fn(x) { x * 2 },
+    max_workers: 4,
+    max_buffer: 16,
+  )
+  |> should.be_ok
+  |> datastream.count
   |> should.equal(10_000)
 }
