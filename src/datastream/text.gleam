@@ -11,6 +11,7 @@
 //// `text.utf8_decode` (separate issue) so the cost lives in one place.
 
 import datastream.{type Step, type Stream, Done, Next}
+import datastream/internal/core
 import gleam/bit_array
 import gleam/list
 import gleam/string
@@ -38,13 +39,6 @@ pub fn lines(over stream: Stream(String)) -> Stream(String) {
   ))
 }
 
-fn maybe_close(source: Stream(a), source_drained: Bool) -> Nil {
-  case source_drained {
-    True -> Nil
-    False -> datastream.close(source)
-  }
-}
-
 // `ready` holds complete lines not yet emitted, in order. `partial`
 // holds the pieces of the current unterminated line in reverse, so a
 // line spread over many chunks is joined once. `after_cr` is True when
@@ -62,7 +56,7 @@ type LinesState {
 
 fn lines_active(state: LinesState) -> Stream(String) {
   datastream.make(pull: fn() { lines_pull(state) }, close: fn() {
-    maybe_close(state.source, state.source_drained)
+    core.close_unless_drained(state.source, drained: state.source_drained)
   })
 }
 
@@ -201,7 +195,7 @@ fn records_active(
 ) -> Stream(List(String)) {
   datastream.make(
     pull: fn() { records_pull(source, acc_rev, source_drained) },
-    close: fn() { maybe_close(source, source_drained) },
+    close: fn() { core.close_unless_drained(source, drained: source_drained) },
   )
 }
 
@@ -265,46 +259,102 @@ pub fn split(
 ) -> Stream(String) {
   case delimiter {
     "" -> graphemes_active(stream, [], "", False)
-    _ -> split_active(stream, "", delimiter, False)
+    _ ->
+      split_active(Split(
+        source: stream,
+        delimiter:,
+        piece: [],
+        recent: [],
+        unscanned: "",
+        has_seen_input: False,
+      ))
   }
 }
 
-fn split_active(
-  source: Stream(String),
-  buffer: String,
-  delimiter: String,
-  has_seen_input: Bool,
-) -> Stream(String) {
-  datastream.make(
-    pull: fn() { split_pull(source, buffer, delimiter, has_seen_input) },
-    close: fn() { datastream.close(source) },
+// Same layout as `binary.delimited`: `piece` holds the text that is
+// certainly part of the current piece, newest first, `recent` the
+// newest scanned chunks covering `byte_size(delimiter) - 1` bytes, and
+// `unscanned` the text not searched yet. A piece spread over many
+// chunks is therefore joined once, and each chunk is searched about
+// once instead of rescanning the whole piece per chunk.
+type Split {
+  Split(
+    source: Stream(String),
+    delimiter: String,
+    piece: List(String),
+    recent: List(String),
+    unscanned: String,
+    has_seen_input: Bool,
   )
 }
 
-fn split_pull(
-  source: Stream(String),
-  buffer: String,
-  delimiter: String,
-  has_seen_input: Bool,
-) -> Step(String, Stream(String)) {
-  case string.split_once(buffer, on: delimiter) {
+fn split_active(state: Split) -> Stream(String) {
+  datastream.make(pull: fn() { split_pull(state) }, close: fn() {
+    datastream.close(state.source)
+  })
+}
+
+fn split_pull(state: Split) -> Step(String, Stream(String)) {
+  let window = reverse_concat([state.unscanned, ..state.recent])
+  case string.split_once(window, on: state.delimiter) {
     Ok(#(before, after)) ->
-      Next(before, split_active(source, after, delimiter, True))
-    Error(_) ->
-      case datastream.pull(source) {
-        Next(chunk, source_rest) ->
-          split_pull(source_rest, buffer <> chunk, delimiter, True)
+      Next(
+        reverse_concat([before, ..state.piece]),
+        split_active(
+          Split(
+            ..state,
+            piece: [],
+            recent: [],
+            unscanned: after,
+            has_seen_input: True,
+          ),
+        ),
+      )
+    Error(_) -> {
+      let #(recent, older) =
+        keep_newest(
+          [state.unscanned, ..state.recent],
+          string.byte_size(state.delimiter) - 1,
+          [],
+        )
+      let state =
+        Split(
+          ..state,
+          piece: list.append(older, state.piece),
+          recent:,
+          unscanned: "",
+        )
+      case datastream.pull(state.source) {
+        Next(chunk, source) ->
+          split_pull(
+            Split(..state, source:, unscanned: chunk, has_seen_input: True),
+          )
         Done ->
-          case has_seen_input {
-            True -> Next(buffer, split_drained())
+          case state.has_seen_input {
+            True ->
+              Next(
+                reverse_concat(list.append(recent, state.piece)),
+                core.empty(),
+              )
             False -> Done
           }
       }
+    }
   }
 }
 
-fn split_drained() -> Stream(String) {
-  datastream.make(pull: fn() { Done }, close: fn() { Nil })
+// Split newest-first `chunks` into the newest ones that together hold
+// at least `wanted` bytes and the older rest.
+fn keep_newest(
+  chunks: List(String),
+  wanted: Int,
+  kept_rev: List(String),
+) -> #(List(String), List(String)) {
+  case chunks, wanted > 0 {
+    [chunk, ..older], True ->
+      keep_newest(older, wanted - string.byte_size(chunk), [chunk, ..kept_rev])
+    _, _ -> #(list.reverse(kept_rev), chunks)
+  }
 }
 
 /// `pending` holds the complete graphemes of the chunks read so far;
@@ -319,7 +369,7 @@ fn graphemes_active(
 ) -> Stream(String) {
   datastream.make(
     pull: fn() { graphemes_pull(source, pending, tail, source_drained) },
-    close: fn() { maybe_close(source, source_drained) },
+    close: fn() { core.close_unless_drained(source, drained: source_drained) },
   )
 }
 
@@ -390,7 +440,7 @@ fn utf8_decode_active(
 ) -> Stream(Result(String, Nil)) {
   datastream.make(
     pull: fn() { utf8_decode_pull(source, buffer, source_drained) },
-    close: fn() { maybe_close(source, source_drained) },
+    close: fn() { core.close_unless_drained(source, drained: source_drained) },
   )
 }
 
@@ -430,32 +480,38 @@ type Run {
 }
 
 fn extract_run(buffer: BitArray, source_drained: Bool) -> Run {
-  do_extract_run(buffer, <<>>, source_drained)
+  do_extract_run(buffer, buffer, 0, source_drained)
 }
 
+// Walks the valid prefix of `buffer` counting its bytes in
+// `valid_size`, then slices it off once, so a large chunk is not
+// rebuilt one code point at a time.
 fn do_extract_run(
   buffer: BitArray,
-  accumulated: BitArray,
+  remaining: BitArray,
+  valid_size: Int,
   source_drained: Bool,
 ) -> Run {
-  case extract_codepoint(buffer, source_drained) {
-    DecodeOk(bytes, rest) ->
-      do_extract_run(rest, bit_array.append(accumulated, bytes), source_drained)
-    DecodeInvalid(rest) ->
-      case bit_array.byte_size(accumulated) {
-        0 -> RunInvalid(rest)
-        _ -> RunOkAccum(accumulated, buffer)
-      }
-    DecodeNeedMore ->
-      case bit_array.byte_size(accumulated) {
-        0 -> RunNeedMore
-        _ -> RunOkAccum(accumulated, buffer)
-      }
-    DecodeDone ->
-      case bit_array.byte_size(accumulated) {
-        0 -> RunDone
-        _ -> RunOkAccum(accumulated, <<>>)
-      }
+  case extract_codepoint(remaining, source_drained), valid_size {
+    DecodeOk(bytes, rest), _ ->
+      do_extract_run(
+        buffer,
+        rest,
+        valid_size + bit_array.byte_size(bytes),
+        source_drained,
+      )
+    DecodeInvalid(rest), 0 -> RunInvalid(rest)
+    DecodeNeedMore, 0 -> RunNeedMore
+    DecodeDone, 0 -> RunDone
+    DecodeDone, _ -> valid_prefix(buffer, valid_size, <<>>)
+    _, _ -> valid_prefix(buffer, valid_size, remaining)
+  }
+}
+
+fn valid_prefix(buffer: BitArray, valid_size: Int, remaining: BitArray) -> Run {
+  case bit_array.slice(buffer, 0, valid_size) {
+    Ok(bytes) -> RunOkAccum(bytes, remaining)
+    Error(_) -> RunInvalid(remaining)
   }
 }
 
