@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.21.0] - 2026-11-22
+
 ### Changed
 
 - `erlang/par.map_*`, `each_*`, `merge`, `race`, the `erlang/time` combinators and `erlang/source.timeout` now re-raise a panic from the mapped function or an upstream in the process that runs the stream, after closing the upstreams and stopping the other workers. They used to end the stream early without saying so, or wait forever. `timeout` now reports an upstream panic as a panic, not as `Error(Nil)`.
