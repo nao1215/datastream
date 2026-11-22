@@ -95,6 +95,52 @@ pub fn lines_cr_then_empty_then_lf_test() {
   |> should.equal(["hello", "world"])
 }
 
+pub fn lines_mixed_terminators_inside_one_chunk_test() {
+  from_list(["a\rb\r\nc\nd\r\re"])
+  |> text.lines
+  |> fold.to_list
+  |> should.equal(["a", "b", "c", "d", "", "e"])
+}
+
+pub fn lines_lone_cr_alone_yields_one_empty_line_test() {
+  from_list(["\r"]) |> text.lines |> fold.to_list |> should.equal([""])
+}
+
+pub fn lines_cr_then_cr_lf_across_chunks_test() {
+  from_list(["x\r", "\r", "\ny"])
+  |> text.lines
+  |> fold.to_list
+  |> should.equal(["x", "", "y"])
+}
+
+pub fn lines_partial_line_across_many_chunks_test() {
+  from_list(["ab", "c", "d\re", "f"])
+  |> text.lines
+  |> fold.to_list
+  |> should.equal(["abcd", "ef"])
+}
+
+pub fn lines_trailing_lf_after_cr_chunk_test() {
+  from_list(["a\r", "\n"])
+  |> text.lines
+  |> fold.to_list
+  |> should.equal(["a"])
+}
+
+pub fn lines_lf_after_consumed_cr_lf_is_a_new_line_test() {
+  from_list(["a\r", "\n", "\n"])
+  |> text.lines
+  |> fold.to_list
+  |> should.equal(["a", ""])
+}
+
+pub fn lines_keeps_non_ascii_text_test() {
+  from_list(["日本\r\n語", "🇯🇵\n"])
+  |> text.lines
+  |> fold.to_list
+  |> should.equal(["日本", "語🇯🇵"])
+}
+
 pub fn lines_cr_at_end_followed_by_all_empty_chunks_test() {
   // CR at chunk end, all remaining chunks are empty, then source drains.
   // The CR should be treated as a terminator; "hello" is emitted.

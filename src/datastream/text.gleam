@@ -29,7 +29,13 @@ import gleam/string
 /// because the next chunk does not start with `\n`, or because the
 /// stream ended) is treated as a line terminator.
 pub fn lines(over stream: Stream(String)) -> Stream(String) {
-  lines_active(stream, "", [], False, False)
+  lines_active(LinesState(
+    source: stream,
+    ready: [],
+    partial: [],
+    after_cr: False,
+    source_drained: False,
+  ))
 }
 
 fn maybe_close(source: Stream(a), source_drained: Bool) -> Nil {
@@ -39,119 +45,123 @@ fn maybe_close(source: Stream(a), source_drained: Bool) -> Nil {
   }
 }
 
-/// `pending` accumulates graphemes of the current line in reverse
-/// order across chunk boundaries; `cr_pending` is True iff the
-/// previous chunk ended with a lone `\r` whose `\r\n` vs `\r`
-/// classification needs the next chunk to resolve.
-fn lines_active(
-  source: Stream(String),
-  buffer: String,
-  pending: List(String),
-  cr_pending: Bool,
-  source_drained: Bool,
-) -> Stream(String) {
-  datastream.make(
-    pull: fn() {
-      lines_pull(source, buffer, pending, cr_pending, source_drained)
-    },
-    close: fn() { maybe_close(source, source_drained) },
+// `ready` holds complete lines not yet emitted, in order. `partial`
+// holds the pieces of the current unterminated line in reverse, so a
+// line spread over many chunks is joined once. `after_cr` is True when
+// the text so far ends with a `\r` that already ended a line, so a
+// `\n` at the start of the next chunk belongs to that `\r\n`.
+type LinesState {
+  LinesState(
+    source: Stream(String),
+    ready: List(String),
+    partial: List(String),
+    after_cr: Bool,
+    source_drained: Bool,
   )
 }
 
-fn lines_pull(
-  source: Stream(String),
-  buffer: String,
-  pending: List(String),
-  cr_pending: Bool,
-  source_drained: Bool,
-) -> Step(String, Stream(String)) {
-  case scan_line(buffer, pending, cr_pending) {
-    LineFound(line, rest) ->
-      Next(line, lines_active(source, rest, [], False, source_drained))
-    LineExhausted(new_pending, new_cr_pending) ->
-      case source_drained {
-        True ->
-          case new_pending, new_cr_pending {
-            [], False -> Done
-            _, _ ->
-              Next(
-                reverse_concat(new_pending),
-                lines_active(source, "", [], False, True),
-              )
-          }
-        False -> pull_next_nonempty_chunk(source, new_pending, new_cr_pending)
+fn lines_active(state: LinesState) -> Stream(String) {
+  datastream.make(pull: fn() { lines_pull(state) }, close: fn() {
+    maybe_close(state.source, state.source_drained)
+  })
+}
+
+fn lines_pull(state: LinesState) -> Step(String, Stream(String)) {
+  case state.ready, state.source_drained {
+    [line, ..ready], _ -> Next(line, lines_active(LinesState(..state, ready:)))
+    [], True ->
+      case state.partial {
+        [] -> Done
+        partial ->
+          Next(
+            reverse_concat(partial),
+            lines_active(LinesState(..state, partial: [])),
+          )
+      }
+    [], False ->
+      case datastream.pull(state.source) {
+        Done -> lines_pull(LinesState(..state, source_drained: True))
+        Next("", source) -> lines_pull(LinesState(..state, source:))
+        Next(chunk, source) ->
+          lines_pull(split_chunk_into_lines(LinesState(..state, source:), chunk))
       }
   }
 }
 
-/// Pull chunks from the source, skipping empty strings, until we get
-/// a non-empty chunk or the source is drained. This prevents an
-/// infinite loop when cr_pending is True and the source emits
-/// consecutive empty-string chunks.
-fn pull_next_nonempty_chunk(
-  source: Stream(String),
-  pending: List(String),
-  cr_pending: Bool,
-) -> Step(String, Stream(String)) {
-  case datastream.pull(source) {
-    Next("", source_rest) ->
-      pull_next_nonempty_chunk(source_rest, pending, cr_pending)
-    Next(chunk, source_rest) ->
-      lines_pull(source_rest, chunk, pending, cr_pending, False)
-    Done -> lines_pull(source, "", pending, cr_pending, True)
+// Splits one chunk on `\n`; each piece is then split on `\r`, since a
+// lone `\r` also ends a line. Only the text after the last terminator
+// is carried over, so every chunk is scanned once.
+fn split_chunk_into_lines(state: LinesState, chunk: String) -> LinesState {
+  let segments = case state.after_cr, string.split(chunk, "\n") {
+    True, ["", ..rest] -> rest
+    _, segments -> segments
+  }
+  collect_lines(segments, state.partial, [])
+  |> fn(collected) {
+    let #(ready_rev, partial, after_cr) = collected
+    LinesState(..state, ready: list.reverse(ready_rev), partial:, after_cr:)
   }
 }
 
-type ScanResult {
-  LineFound(line: String, remaining: String)
-  LineExhausted(pending: List(String), cr_pending: Bool)
-}
-
-fn scan_line(
-  buffer: String,
-  pending: List(String),
-  cr_pending: Bool,
-) -> ScanResult {
-  case cr_pending {
-    True -> resume_cr(buffer, pending)
-    False -> walk(buffer, pending)
-  }
-}
-
-fn resume_cr(buffer: String, pending: List(String)) -> ScanResult {
-  // The previous chunk ended with a lone `\r`. The line was already
-  // terminated; we just need to consume an immediately following `\n`
-  // so it isn't counted as a separate empty line.
-  case string.pop_grapheme(buffer) {
-    Ok(#("\n", rest_after)) -> LineFound(reverse_concat(pending), rest_after)
-    Ok(_) -> LineFound(reverse_concat(pending), buffer)
-    Error(_) -> LineExhausted(pending, True)
-  }
-}
-
-fn walk(remaining: String, acc: List(String)) -> ScanResult {
-  case string.pop_grapheme(remaining) {
-    Error(_) -> LineExhausted(acc, False)
-    Ok(#(g, rest)) ->
-      case g {
-        "\n" -> LineFound(reverse_concat(acc), rest)
-        "\r\n" -> LineFound(reverse_concat(acc), rest)
-        "\r" -> lookahead_cr(rest, acc)
-        _ -> walk(rest, [g, ..acc])
+fn collect_lines(
+  segments: List(String),
+  partial: List(String),
+  ready_rev: List(String),
+) -> #(List(String), List(String), Bool) {
+  case segments {
+    [] -> #(ready_rev, partial, False)
+    [last] -> {
+      // Text after the last `\n`: lines ended by `\r` are complete; the
+      // rest starts a line that a later chunk continues.
+      case split_last(string.split(last, "\r")) {
+        #([], tail) -> #(ready_rev, push_piece(partial, tail), False)
+        #(complete, tail) -> #(
+          emit_lines(complete, partial, ready_rev),
+          push_piece([], tail),
+          tail == "",
+        )
       }
+    }
+    [segment, ..rest] -> {
+      // A segment followed by `\n`. A trailing `\r` is the `\r` of a
+      // `\r\n`; any other `\r` ends a line of its own.
+      let pieces = string.split(segment, "\r")
+      let pieces = case split_last(pieces) {
+        #([_, ..] as complete, "") -> complete
+        _ -> pieces
+      }
+      collect_lines(rest, [], emit_lines(pieces, partial, ready_rev))
+    }
   }
 }
 
-fn lookahead_cr(rest: String, acc: List(String)) -> ScanResult {
-  case string.pop_grapheme(rest) {
-    Ok(#("\n", rest_after)) -> LineFound(reverse_concat(acc), rest_after)
-    Ok(_) -> LineFound(reverse_concat(acc), rest)
-    Error(_) -> LineExhausted(acc, True)
+// Prepends `pieces` to `ready_rev` as complete lines, the first one
+// joined to the carried-over `partial` line.
+fn emit_lines(
+  pieces: List(String),
+  partial: List(String),
+  ready_rev: List(String),
+) -> List(String) {
+  case pieces {
+    [] -> [reverse_concat(partial), ..ready_rev]
+    [first, ..others] ->
+      list.fold(
+        others,
+        [reverse_concat(push_piece(partial, first)), ..ready_rev],
+        fn(acc, line) { [line, ..acc] },
+      )
   }
 }
 
-fn reverse_concat(reversed_graphemes: List(String)) -> String {
-  string.concat(list.reverse(reversed_graphemes))
+fn push_piece(partial: List(String), piece: String) -> List(String) {
+  case piece {
+    "" -> partial
+    _ -> [piece, ..partial]
+  }
+}
+
+fn reverse_concat(reversed_pieces: List(String)) -> String {
+  string.concat(list.reverse(reversed_pieces))
 }
 
 /// Group a stream of lines into records separated by blank lines.

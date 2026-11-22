@@ -12,6 +12,7 @@ import datastream/fold
 import datastream/source
 import datastream/stream
 import datastream/text
+import gleam/string
 import gleeunit
 import gleeunit/should
 
@@ -69,4 +70,20 @@ pub fn group_adjacent_on_one_long_run_does_not_grow_the_stack_test() {
   |> stream.group_adjacent(by: fn(x) { x })
   |> fold.count
   |> should.equal(1)
+}
+
+pub fn text_lines_on_many_tiny_chunks_without_newline_test() {
+  source.repeat("a")
+  |> stream.take(up_to: 1_000_000)
+  |> text.lines
+  |> fold.count
+  |> should.equal(1)
+}
+
+pub fn text_lines_on_one_large_chunk_is_linear_test() {
+  let line = string.repeat("x", times: 99) <> "\n"
+  source.once(string.repeat(line, times: 4000))
+  |> text.lines
+  |> fold.count
+  |> should.equal(4000)
 }
