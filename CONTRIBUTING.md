@@ -2,7 +2,7 @@
 
 ## Development setup
 
-- Gleam 1.14+ (`.mise.toml` pins the version CI uses for formatting)
+- Gleam 1.14+ (`.mise.toml` pins the local development version)
 - Erlang/OTP 27+ (CI tests 27 and 29)
 - Node.js 22+ (required for the JavaScript-target test run)
 - [just](https://github.com/casey/just) (task runner)
@@ -12,12 +12,10 @@
 git clone https://github.com/nao1215/datastream.git
 cd datastream
 mise install
-gleam deps download
+just deps
 ```
 
-`just` recipes locate the mise-managed toolchain via
-`scripts/lib/mise_bootstrap.sh`, so `mise activate` is not required
-in the current shell.
+`just` recipes locate the mise-managed toolchain via `scripts/lib/mise_bootstrap.sh`, so `mise activate` is not required in the current shell.
 
 ## Running tests
 
@@ -25,8 +23,7 @@ in the current shell.
 just ci
 ```
 
-Runs format check, type check, lint, both-target builds, and
-both-target tests. Individual steps:
+Runs format check, type check, lint, both-target builds, and both-target tests. Individual steps:
 
 | Command | Effect |
 | --- | --- |
@@ -39,9 +36,7 @@ both-target tests. Individual steps:
 | `just docs` | Build HexDocs HTML |
 | `just clean` | Delete `build/` |
 
-The cross-target core must pass on both `--target erlang` and
-`--target javascript`. Tests that import `datastream/erlang/*` are
-limited to the Erlang target.
+The cross-target core must pass on both `--target erlang` and `--target javascript`. Tests of Erlang-only operations use `@target(erlang)`.
 
 ## Code style
 
@@ -64,9 +59,7 @@ limited to the Erlang target.
 
 ## Public documentation style
 
-User-facing docs (README, release notes, doc comments on public API)
-follow a terse reference-oriented style. Treat violations as review
-blockers.
+User-facing docs (README, release notes, doc comments on public API) follow a terse reference-oriented style. Treat violations as review blockers.
 
 - No marketing prose. Write as if documenting a standard library.
 - No bold emphasis on inline phrases. Use bold only for table headers
@@ -78,3 +71,18 @@ blockers.
   sure that X has Y".
 - Do not use second-person cheerleading ("you can easily", "just do
   X").
+
+## Verifying releases
+
+Each GitHub Release attaches the Hex package tarball (`datastream-<version>.tar`), `checksums.txt`, a cosign signature bundle (`checksums.txt.sigstore.json`) and build provenance (`datastream-<version>.intoto.jsonl`). Download the assets, then:
+
+```sh
+gh attestation verify datastream-<version>.tar --repo nao1215/datastream
+
+cosign verify-blob \
+  --bundle checksums.txt.sigstore.json \
+  --certificate-identity-regexp '^https://github\.com/nao1215/datastream/\.github/workflows/release\.yml@refs/tags/v' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  checksums.txt
+sha256sum --check checksums.txt
+```
