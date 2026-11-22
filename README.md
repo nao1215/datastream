@@ -7,7 +7,7 @@
 [![Hex](https://img.shields.io/hexpm/v/datastream)](https://hex.pm/packages/datastream)
 [![Hex Docs](https://img.shields.io/badge/hex-docs-ffaff3)](https://hexdocs.pm/datastream/)
 [![Hex Downloads](https://img.shields.io/hexpm/dt/datastream)](https://hex.pm/packages/datastream)
-[![License](https://img.shields.io/github/license/nao1215/datastream)](./LICENSE)
+[![License](https://img.shields.io/github/license/nao1215/datastream)](https://github.com/nao1215/datastream/blob/main/LICENSE)
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/nao1215/datastream/badge)](https://scorecard.dev/viewer/?uri=github.com/nao1215/datastream)
 
 datastream processes streams of values, text, and bytes in Gleam.
@@ -45,13 +45,13 @@ The API uses one import, `datastream`. See [HexDocs](https://hexdocs.pm/datastre
 
 ## Examples
 
-The [example pipelines](test/examples/) run in the test suite:
+The [example pipelines](https://github.com/nao1215/datastream/tree/main/test/examples) run in the test suite:
 
-- [Count log levels](test/examples/log_pipeline_example.gleam) from text split across chunks.
-- [Decode and parse records](test/examples/ndjson_pipeline_example.gleam) from a byte stream.
-- [Read length-prefixed frames](test/examples/length_prefixed_pipeline_example.gleam).
-- [Map with parallel workers](test/examples/parallel_pipeline_example.gleam) on Erlang.
-- [Validate rows with dataprep](test/examples/dataprep_pipeline_example.gleam).
+- [Count log levels](https://github.com/nao1215/datastream/blob/main/test/examples/log_pipeline_example.gleam) from text split across chunks.
+- [Decode and parse records](https://github.com/nao1215/datastream/blob/main/test/examples/ndjson_pipeline_example.gleam) from a byte stream.
+- [Read length-prefixed frames](https://github.com/nao1215/datastream/blob/main/test/examples/length_prefixed_pipeline_example.gleam).
+- [Map with parallel workers](https://github.com/nao1215/datastream/blob/main/test/examples/parallel_pipeline_example.gleam) on Erlang.
+- [Validate rows with dataprep](https://github.com/nao1215/datastream/blob/main/test/examples/dataprep_pipeline_example.gleam).
 
 ## Resource and target behavior
 
@@ -59,12 +59,12 @@ Each terminal operation starts a fresh run of an ordinary pipeline. Consumers re
 
 Text and binary parsers retain unfinished records between chunks. Memory use depends on the largest unfinished record. Length-prefixed framing accepts a frame-size limit.
 
-On JavaScript, `to_async_iterable` exports a synchronous pipeline for a host `for await` loop. Breaking out of the loop closes the stream. The [JavaScript adapter guide](doc/javascript.md) describes the adapter and its target-specific API.
+On JavaScript, `to_async_iterable` exports a synchronous pipeline for a host `for await` loop. Breaking out of the loop closes the stream. The [JavaScript adapter guide](https://hexdocs.pm/datastream/javascript.html) describes the adapter and its target-specific API.
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for setup and release verification, and [the testing guide](doc/testing.md) for properties and chunk-boundary checks.
+See [CONTRIBUTING.md](https://github.com/nao1215/datastream/blob/main/CONTRIBUTING.md) for setup and release verification, and [the testing guide](https://github.com/nao1215/datastream/blob/main/doc/testing.md) for properties and chunk-boundary checks.
 
 ## License
 
-[MIT](LICENSE).
+[MIT](https://github.com/nao1215/datastream/blob/main/LICENSE).
