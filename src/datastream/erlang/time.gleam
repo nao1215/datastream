@@ -4,11 +4,10 @@
 //// debounced / throttled / sampled / windowed against BEAM monotonic
 //// time, never against the wall clock that can jump backwards.
 ////
-//// Implementation strategy: each combinator spawns one worker
-//// process that pumps the upstream into a shared subject. The main
-//// process drives the consuming `Stream` and uses
-//// `process.receive(within: ms)` to wait simultaneously for the next
-//// element and for a timer deadline.
+//// Implementation strategy: on its first pull each combinator spawns
+//// one worker process that pulls the upstream one element per request.
+//// The consuming process waits for the next element and for a timer
+//// deadline at the same time.
 ////
 //// Every public function in this module is gated on
 //// `@target(erlang)`. On the JavaScript target the module still
@@ -37,15 +36,10 @@ import datastream.{type Stream, Done, Next}
 import datastream/chunk.{type Chunk}
 
 @target(erlang)
-import datastream/erlang/internal/pump.{
-  type Pump, type Stop, PumpDone, PumpElement,
-}
+import datastream/erlang/internal/pump.{type Pump, Element, Exhausted}
 
 @target(erlang)
-import gleam/erlang/atom.{type Atom}
-
-@target(erlang)
-import gleam/erlang/process.{type Subject}
+import gleam/erlang/process
 
 @target(erlang)
 import gleam/list
@@ -54,19 +48,10 @@ import gleam/list
 import gleam/option.{type Option, None, Some}
 
 @target(erlang)
-@external(erlang, "erlang", "monotonic_time")
-fn erlang_monotonic_time(unit: Atom) -> Int
-
-@target(erlang)
-fn now_ms() -> Int {
-  erlang_monotonic_time(atom.create("millisecond"))
-}
-
-@target(erlang)
 /// Milliseconds remaining until `deadline`, clamped to a minimum of
 /// 0. Used as the `within` argument for `process.receive`.
 fn ms_until(deadline: Int) -> Int {
-  case deadline - now_ms() {
+  case deadline - pump.now_ms() {
     delta if delta > 0 -> delta
     _ -> 0
   }
@@ -75,10 +60,10 @@ fn ms_until(deadline: Int) -> Int {
 // --- shared close handler ------------------------------------------------
 
 @target(erlang)
-fn maybe_stop(stop_subj: Subject(Stop), upstream_done: Bool) -> Nil {
+fn maybe_stop(upstream: Pump(a), upstream_done: Bool) -> Nil {
   case upstream_done {
     True -> Nil
-    False -> pump.stop(stop_subj)
+    False -> pump.stop_pump(upstream)
   }
 }
 
@@ -87,8 +72,7 @@ fn maybe_stop(stop_subj: Subject(Stop), upstream_done: Bool) -> Nil {
 @target(erlang)
 type DebounceState(a) {
   DebounceState(
-    result_subj: Subject(Pump(a)),
-    stop_subj: Subject(Stop),
+    upstream: Pump(a),
     latest: Option(a),
     deadline: Int,
     upstream_done: Bool,
@@ -103,16 +87,12 @@ type DebounceState(a) {
 /// Useful for collapsing UI events (typing, resize) into a single
 /// "settled" notification.
 pub fn debounce(over stream: Stream(a), quiet_for ms: Int) -> Stream(a) {
-  let result_subj = process.new_subject()
-  let stop_subj = pump.spawn_pump(stream, into: result_subj)
-  build_debounce_stream(
-    DebounceState(
-      result_subj: result_subj,
-      stop_subj: stop_subj,
-      latest: None,
-      deadline: 0,
-      upstream_done: False,
-    ),
+  use upstream, _now <- pump.on_first_pull(
+    stream,
+    context: "datastream/erlang/time.debounce",
+  )
+  debounce_step(
+    DebounceState(upstream:, latest: None, deadline: 0, upstream_done: False),
     ms,
   )
 }
@@ -120,7 +100,7 @@ pub fn debounce(over stream: Stream(a), quiet_for ms: Int) -> Stream(a) {
 @target(erlang)
 fn build_debounce_stream(state: DebounceState(a), ms: Int) -> Stream(a) {
   datastream.make(pull: fn() { debounce_step(state, ms) }, close: fn() {
-    maybe_stop(state.stop_subj, state.upstream_done)
+    maybe_stop(state.upstream, state.upstream_done)
   })
 }
 
@@ -129,58 +109,56 @@ fn debounce_step(
   state: DebounceState(a),
   ms: Int,
 ) -> datastream.Step(a, Stream(a)) {
-  case state.upstream_done {
-    True -> Done
-    False -> debounce_wait(state, ms)
-  }
-}
-
-@target(erlang)
-fn debounce_wait(
-  state: DebounceState(a),
-  ms: Int,
-) -> datastream.Step(a, Stream(a)) {
-  case state.latest {
-    None ->
-      case process.receive_forever(from: state.result_subj) {
-        PumpElement(element) ->
-          debounce_wait(
+  case state.upstream_done, state.latest {
+    True, _ -> Done
+    False, None ->
+      case pump.next_forever(state.upstream) {
+        #(upstream, Element(element)) ->
+          debounce_step(
             DebounceState(
               ..state,
+              upstream:,
               latest: Some(element),
-              deadline: now_ms() + ms,
+              deadline: pump.now_ms() + ms,
             ),
             ms,
           )
-        PumpDone -> Done
+        #(_, Exhausted) -> Done
       }
-    Some(value) -> {
-      let wait = ms_until(state.deadline)
-      case process.receive(from: state.result_subj, within: wait) {
-        Ok(PumpElement(element)) ->
-          debounce_wait(
+    False, Some(value) ->
+      case pump.next(state.upstream, within: ms_until(state.deadline)) {
+        #(upstream, Ok(Element(element))) ->
+          debounce_step(
             DebounceState(
               ..state,
+              upstream:,
               latest: Some(element),
-              deadline: now_ms() + ms,
+              deadline: pump.now_ms() + ms,
             ),
             ms,
           )
-        Ok(PumpDone) ->
+        #(upstream, Ok(Exhausted)) ->
           Next(
             value,
             build_debounce_stream(
-              DebounceState(..state, latest: None, upstream_done: True),
+              DebounceState(
+                ..state,
+                upstream:,
+                latest: None,
+                upstream_done: True,
+              ),
               ms,
             ),
           )
-        Error(_) ->
+        #(upstream, Error(_)) ->
           Next(
             value,
-            build_debounce_stream(DebounceState(..state, latest: None), ms),
+            build_debounce_stream(
+              DebounceState(..state, upstream:, latest: None),
+              ms,
+            ),
           )
       }
-    }
   }
 }
 
@@ -188,12 +166,7 @@ fn debounce_wait(
 
 @target(erlang)
 type ThrottleState(a) {
-  ThrottleState(
-    result_subj: Subject(Pump(a)),
-    stop_subj: Subject(Stop),
-    next_window_start: Option(Int),
-    upstream_done: Bool,
-  )
+  ThrottleState(upstream: Pump(a), next_window_start: Option(Int))
 }
 
 @target(erlang)
@@ -201,23 +174,17 @@ type ThrottleState(a) {
 ///
 /// Windows start at the moment the first element is emitted.
 pub fn throttle(over stream: Stream(a), every ms: Int) -> Stream(a) {
-  let result_subj = process.new_subject()
-  let stop_subj = pump.spawn_pump(stream, into: result_subj)
-  build_throttle_stream(
-    ThrottleState(
-      result_subj: result_subj,
-      stop_subj: stop_subj,
-      next_window_start: None,
-      upstream_done: False,
-    ),
-    ms,
+  use upstream, _now <- pump.on_first_pull(
+    stream,
+    context: "datastream/erlang/time.throttle",
   )
+  throttle_step(ThrottleState(upstream:, next_window_start: None), ms)
 }
 
 @target(erlang)
 fn build_throttle_stream(state: ThrottleState(a), ms: Int) -> Stream(a) {
   datastream.make(pull: fn() { throttle_step(state, ms) }, close: fn() {
-    maybe_stop(state.stop_subj, state.upstream_done)
+    pump.stop_pump(state.upstream)
   })
 }
 
@@ -226,47 +193,24 @@ fn throttle_step(
   state: ThrottleState(a),
   ms: Int,
 ) -> datastream.Step(a, Stream(a)) {
-  case state.upstream_done {
-    True -> Done
-    False ->
-      case process.receive_forever(from: state.result_subj) {
-        PumpDone -> Done
-        PumpElement(element) -> throttle_handle(element, state, ms)
+  case pump.next_forever(state.upstream) {
+    #(_, Exhausted) -> Done
+    #(upstream, Element(element)) -> {
+      let state = ThrottleState(..state, upstream:)
+      let now = pump.now_ms()
+      case state.next_window_start {
+        Some(start) if now < start -> throttle_step(state, ms)
+        _ ->
+          Next(
+            element,
+            build_throttle_stream(
+              ThrottleState(..state, next_window_start: Some(now + ms)),
+              ms,
+            ),
+          )
       }
+    }
   }
-}
-
-@target(erlang)
-fn throttle_handle(
-  element: a,
-  state: ThrottleState(a),
-  ms: Int,
-) -> datastream.Step(a, Stream(a)) {
-  let now = now_ms()
-  case state.next_window_start {
-    None -> throttle_emit(element, state, now, ms)
-    Some(start) ->
-      case now >= start {
-        True -> throttle_emit(element, state, now, ms)
-        False -> throttle_step(state, ms)
-      }
-  }
-}
-
-@target(erlang)
-fn throttle_emit(
-  element: a,
-  state: ThrottleState(a),
-  now: Int,
-  ms: Int,
-) -> datastream.Step(a, Stream(a)) {
-  Next(
-    element,
-    build_throttle_stream(
-      ThrottleState(..state, next_window_start: Some(now + ms)),
-      ms,
-    ),
-  )
 }
 
 // --- sample --------------------------------------------------------------
@@ -274,8 +218,7 @@ fn throttle_emit(
 @target(erlang)
 type SampleState(a) {
   SampleState(
-    result_subj: Subject(Pump(a)),
-    stop_subj: Subject(Stop),
+    upstream: Pump(a),
     window_start: Int,
     latest: Option(a),
     upstream_done: Bool,
@@ -287,13 +230,14 @@ type SampleState(a) {
 /// seen during the window. If no element arrived during the window,
 /// the boundary emits nothing and the next window begins.
 pub fn sample(over stream: Stream(a), every ms: Int) -> Stream(a) {
-  let result_subj = process.new_subject()
-  let stop_subj = pump.spawn_pump(stream, into: result_subj)
-  build_sample_stream(
+  use upstream, now <- pump.on_first_pull(
+    stream,
+    context: "datastream/erlang/time.sample",
+  )
+  sample_step(
     SampleState(
-      result_subj: result_subj,
-      stop_subj: stop_subj,
-      window_start: now_ms(),
+      upstream:,
+      window_start: now,
       latest: None,
       upstream_done: False,
     ),
@@ -304,7 +248,7 @@ pub fn sample(over stream: Stream(a), every ms: Int) -> Stream(a) {
 @target(erlang)
 fn build_sample_stream(state: SampleState(a), ms: Int) -> Stream(a) {
   datastream.make(pull: fn() { sample_step(state, ms) }, close: fn() {
-    maybe_stop(state.stop_subj, state.upstream_done)
+    maybe_stop(state.upstream, state.upstream_done)
   })
 }
 
@@ -325,34 +269,28 @@ fn sample_wait(
   ms: Int,
 ) -> datastream.Step(a, Stream(a)) {
   let deadline = state.window_start + ms
-  let wait = ms_until(deadline)
-  case process.receive(from: state.result_subj, within: wait) {
-    Ok(PumpElement(element)) ->
-      sample_wait(SampleState(..state, latest: Some(element)), ms)
-    Ok(PumpDone) ->
-      case state.latest {
-        Some(value) ->
-          Next(
-            value,
-            build_sample_stream(
-              SampleState(..state, latest: None, upstream_done: True),
-              ms,
-            ),
-          )
-        None -> Done
-      }
-    Error(_) ->
-      case state.latest {
-        Some(value) ->
-          Next(
-            value,
-            build_sample_stream(
-              SampleState(..state, latest: None, window_start: deadline),
-              ms,
-            ),
-          )
-        None -> sample_wait(SampleState(..state, window_start: deadline), ms)
-      }
+  case pump.next(state.upstream, within: ms_until(deadline)), state.latest {
+    #(upstream, Ok(Element(element))), _ ->
+      sample_wait(SampleState(..state, upstream:, latest: Some(element)), ms)
+    #(_, Ok(Exhausted)), None -> Done
+    #(upstream, Ok(Exhausted)), Some(value) ->
+      Next(
+        value,
+        build_sample_stream(
+          SampleState(..state, upstream:, latest: None, upstream_done: True),
+          ms,
+        ),
+      )
+    #(upstream, Error(_)), None ->
+      sample_wait(SampleState(..state, upstream:, window_start: deadline), ms)
+    #(upstream, Error(_)), Some(value) ->
+      Next(
+        value,
+        build_sample_stream(
+          SampleState(..state, upstream:, window_start: deadline, latest: None),
+          ms,
+        ),
+      )
   }
 }
 
@@ -360,13 +298,7 @@ fn sample_wait(
 
 @target(erlang)
 type RateState(a) {
-  RateState(
-    result_subj: Subject(Pump(a)),
-    stop_subj: Subject(Stop),
-    window_start: Int,
-    count_in_window: Int,
-    upstream_done: Bool,
-  )
+  RateState(upstream: Pump(a), window_start: Int, count_in_window: Int)
 }
 
 @target(erlang)
@@ -378,16 +310,12 @@ pub fn rate_limit(
   max_per_window count: Int,
   window_ms ms: Int,
 ) -> Stream(a) {
-  let result_subj = process.new_subject()
-  let stop_subj = pump.spawn_pump(stream, into: result_subj)
-  build_rate_limit_stream(
-    RateState(
-      result_subj: result_subj,
-      stop_subj: stop_subj,
-      window_start: now_ms(),
-      count_in_window: 0,
-      upstream_done: False,
-    ),
+  use upstream, now <- pump.on_first_pull(
+    stream,
+    context: "datastream/erlang/time.rate_limit",
+  )
+  rate_limit_step(
+    RateState(upstream:, window_start: now, count_in_window: 0),
     count,
     ms,
   )
@@ -400,7 +328,7 @@ fn build_rate_limit_stream(
   ms: Int,
 ) -> Stream(a) {
   datastream.make(pull: fn() { rate_limit_step(state, count, ms) }, close: fn() {
-    maybe_stop(state.stop_subj, state.upstream_done)
+    pump.stop_pump(state.upstream)
   })
 }
 
@@ -410,59 +338,26 @@ fn rate_limit_step(
   count: Int,
   ms: Int,
 ) -> datastream.Step(a, Stream(a)) {
-  case state.upstream_done {
-    True -> Done
-    False ->
-      case process.receive_forever(from: state.result_subj) {
-        PumpDone -> Done
-        PumpElement(element) -> rate_limit_handle(element, state, count, ms)
+  case pump.next_forever(state.upstream) {
+    #(_, Exhausted) -> Done
+    #(upstream, Element(element)) -> {
+      let now = pump.now_ms()
+      let state = case now >= state.window_start + ms {
+        True -> RateState(upstream:, window_start: now, count_in_window: 0)
+        False -> RateState(..state, upstream:)
       }
+      let state = case state.count_in_window < count {
+        True -> RateState(..state, count_in_window: state.count_in_window + 1)
+        False -> {
+          // Over the limit: wait for the window to end, then start a new
+          // one with this element in it.
+          process.sleep(ms_until(state.window_start + ms))
+          RateState(..state, window_start: pump.now_ms(), count_in_window: 1)
+        }
+      }
+      Next(element, build_rate_limit_stream(state, count, ms))
+    }
   }
-}
-
-@target(erlang)
-fn rate_limit_handle(
-  element: a,
-  state: RateState(a),
-  count: Int,
-  ms: Int,
-) -> datastream.Step(a, Stream(a)) {
-  let now = now_ms()
-  let state = case now >= state.window_start + ms {
-    True -> RateState(..state, window_start: now, count_in_window: 0)
-    False -> state
-  }
-  case state.count_in_window < count {
-    True ->
-      Next(
-        element,
-        build_rate_limit_stream(
-          RateState(..state, count_in_window: state.count_in_window + 1),
-          count,
-          ms,
-        ),
-      )
-    False -> rate_limit_delay(element, state, count, ms)
-  }
-}
-
-@target(erlang)
-fn rate_limit_delay(
-  element: a,
-  state: RateState(a),
-  count: Int,
-  ms: Int,
-) -> datastream.Step(a, Stream(a)) {
-  process.sleep(ms_until(state.window_start + ms))
-  let new_now = now_ms()
-  Next(
-    element,
-    build_rate_limit_stream(
-      RateState(..state, window_start: new_now, count_in_window: 1),
-      count,
-      ms,
-    ),
-  )
 }
 
 // --- window_time ---------------------------------------------------------
@@ -470,8 +365,7 @@ fn rate_limit_delay(
 @target(erlang)
 type WindowState(a) {
   WindowState(
-    result_subj: Subject(Pump(a)),
-    stop_subj: Subject(Stop),
+    upstream: Pump(a),
     buffer: List(a),
     window_start: Int,
     upstream_done: Bool,
@@ -483,16 +377,12 @@ type WindowState(a) {
 /// `Chunk(a)` containing every element that arrived during that
 /// window. Empty windows emit empty chunks.
 pub fn window_time(over stream: Stream(a), span ms: Int) -> Stream(Chunk(a)) {
-  let result_subj = process.new_subject()
-  let stop_subj = pump.spawn_pump(stream, into: result_subj)
-  build_window_stream(
-    WindowState(
-      result_subj: result_subj,
-      stop_subj: stop_subj,
-      buffer: [],
-      window_start: now_ms(),
-      upstream_done: False,
-    ),
+  use upstream, now <- pump.on_first_pull(
+    stream,
+    context: "datastream/erlang/time.window_time",
+  )
+  window_step(
+    WindowState(upstream:, buffer: [], window_start: now, upstream_done: False),
     ms,
   )
 }
@@ -500,7 +390,7 @@ pub fn window_time(over stream: Stream(a), span ms: Int) -> Stream(Chunk(a)) {
 @target(erlang)
 fn build_window_stream(state: WindowState(a), ms: Int) -> Stream(Chunk(a)) {
   datastream.make(pull: fn() { window_step(state, ms) }, close: fn() {
-    maybe_stop(state.stop_subj, state.upstream_done)
+    maybe_stop(state.upstream, state.upstream_done)
   })
 }
 
@@ -509,38 +399,37 @@ fn window_step(
   state: WindowState(a),
   ms: Int,
 ) -> datastream.Step(Chunk(a), Stream(Chunk(a))) {
-  case state.upstream_done {
-    True ->
-      case state.buffer {
-        [] -> Done
-        _ ->
+  case state.upstream_done, state.buffer {
+    True, [] -> Done
+    True, buffer ->
+      Next(
+        chunk.from_list(list.reverse(buffer)),
+        build_window_stream(WindowState(..state, buffer: []), ms),
+      )
+    False, _ -> {
+      let deadline = state.window_start + ms
+      case pump.next(state.upstream, within: ms_until(deadline)) {
+        #(upstream, Ok(Element(element))) ->
+          window_step(
+            WindowState(..state, upstream:, buffer: [element, ..state.buffer]),
+            ms,
+          )
+        #(upstream, Ok(Exhausted)) ->
+          window_step(WindowState(..state, upstream:, upstream_done: True), ms)
+        #(upstream, Error(_)) ->
           Next(
             chunk.from_list(list.reverse(state.buffer)),
-            build_window_stream(WindowState(..state, buffer: []), ms),
+            build_window_stream(
+              WindowState(
+                ..state,
+                upstream:,
+                buffer: [],
+                window_start: deadline,
+              ),
+              ms,
+            ),
           )
       }
-    False -> window_wait(state, ms)
-  }
-}
-
-@target(erlang)
-fn window_wait(
-  state: WindowState(a),
-  ms: Int,
-) -> datastream.Step(Chunk(a), Stream(Chunk(a))) {
-  let deadline = state.window_start + ms
-  let wait = ms_until(deadline)
-  case process.receive(from: state.result_subj, within: wait) {
-    Ok(PumpElement(element)) ->
-      window_wait(WindowState(..state, buffer: [element, ..state.buffer]), ms)
-    Ok(PumpDone) -> window_step(WindowState(..state, upstream_done: True), ms)
-    Error(_) ->
-      Next(
-        chunk.from_list(list.reverse(state.buffer)),
-        build_window_stream(
-          WindowState(..state, buffer: [], window_start: deadline),
-          ms,
-        ),
-      )
+    }
   }
 }

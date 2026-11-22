@@ -28,7 +28,10 @@ import datastream/fold
 import datastream/source
 
 @target(erlang)
-import gleam/erlang/atom.{type Atom}
+import datastream/erlang/internal/pump.{type Pump, Element, Exhausted}
+
+@target(erlang)
+import datastream/internal/core
 
 @target(erlang)
 import gleam/erlang/process.{type Subject}
@@ -113,7 +116,7 @@ fn receive_loop(
 pub fn ticks(every period_ms: Int) -> Stream(Int) {
   source.unfold(from: Nil, with: fn(_) {
     process.sleep(period_ms)
-    Next(element: monotonic_millis(), state: Nil)
+    Next(element: pump.now_ms(), state: Nil)
   })
 }
 
@@ -135,16 +138,14 @@ pub fn interval(every period_ms: Int) -> Stream(Nil) {
 /// `ms` ms, exactly one `Error(Nil)` element is emitted and the
 /// stream halts.
 ///
-/// Implementation: each pull spawns an unlinked worker process that
-/// performs the `datastream.pull` and forwards the step on a
-/// dedicated subject; the parent waits with `process.receive(_,
-/// within: ms)`. On a deadline trip the abandoned worker may still
-/// complete the `pull` afterwards; its result is silently discarded
-/// and any resource it had partially acquired is left to the BEAM
-/// runtime to reclaim.
-///
-/// Downstream early-exit closes the upstream the next pull would
-/// have read from; an abandoned worker is not waited on.
+/// Implementation: the first pull spawns one worker process that
+/// pulls the upstream one element per request for the whole run, so an
+/// upstream whose handle belongs to the process that opened it keeps
+/// working. The caller waits for each element with
+/// `process.receive(_, within: ms)`. On a deadline trip, or on
+/// downstream early exit, the worker is told to stop and closes the
+/// upstream once its pull in progress returns; the caller does not
+/// wait for that.
 ///
 /// **Limitation:** because the pull happens in a different process
 /// than the one that built the upstream, this combinator MUST NOT
@@ -155,80 +156,32 @@ pub fn timeout(
   over stream: Stream(a),
   within ms: Int,
 ) -> Stream(Result(a, Nil)) {
-  build_timeout_stream(TimeoutActive(stream), ms)
+  use upstream, _now <- pump.on_first_pull(
+    stream,
+    context: "datastream/erlang/source.timeout",
+  )
+  timeout_pull(upstream, ms)
 }
 
 @target(erlang)
-type TimeoutState(a) {
-  TimeoutActive(stream: Stream(a))
-  TimeoutDrained
-}
-
-@target(erlang)
-type TimeoutPull(a) {
-  TimeoutNext(element: a, rest: Stream(a))
-  TimeoutDone
-}
-
-@target(erlang)
-fn build_timeout_stream(
-  state: TimeoutState(a),
-  ms: Int,
-) -> Stream(Result(a, Nil)) {
-  datastream.make(pull: fn() { timeout_pull(state, ms) }, close: fn() {
-    timeout_close(state)
+fn timeout_active(upstream: Pump(a), ms: Int) -> Stream(Result(a, Nil)) {
+  datastream.make(pull: fn() { timeout_pull(upstream, ms) }, close: fn() {
+    pump.stop_pump(upstream)
   })
 }
 
 @target(erlang)
-fn timeout_close(state: TimeoutState(a)) -> Nil {
-  case state {
-    TimeoutDrained -> Nil
-    TimeoutActive(stream) -> datastream.close(stream)
-  }
-}
-
-@target(erlang)
 fn timeout_pull(
-  state: TimeoutState(a),
+  upstream: Pump(a),
   ms: Int,
 ) -> datastream.Step(Result(a, Nil), Stream(Result(a, Nil))) {
-  case state {
-    TimeoutDrained -> Done
-    TimeoutActive(stream) -> {
-      let result = pull_with_deadline(stream, ms)
-      case result {
-        Ok(TimeoutNext(element, rest)) ->
-          Next(Ok(element), build_timeout_stream(TimeoutActive(rest), ms))
-        Ok(TimeoutDone) -> Done
-        Error(_) -> Next(Error(Nil), build_timeout_stream(TimeoutDrained, ms))
-      }
+  case pump.next(upstream, within: ms) {
+    #(upstream, Ok(Element(element))) ->
+      Next(Ok(element), timeout_active(upstream, ms))
+    #(_, Ok(Exhausted)) -> Done
+    #(upstream, Error(_)) -> {
+      pump.stop_pump(upstream)
+      Next(Error(Nil), core.empty())
     }
   }
-}
-
-@target(erlang)
-fn pull_with_deadline(
-  stream: Stream(a),
-  ms: Int,
-) -> Result(TimeoutPull(a), Nil) {
-  let result_subject = process.new_subject()
-  let _pid =
-    process.spawn_unlinked(fn() {
-      case datastream.pull(stream) {
-        Next(element, rest) ->
-          process.send(result_subject, TimeoutNext(element, rest))
-        Done -> process.send(result_subject, TimeoutDone)
-      }
-    })
-  process.receive(from: result_subject, within: ms)
-}
-
-@target(erlang)
-@external(erlang, "erlang", "monotonic_time")
-fn erlang_monotonic_time(unit: Atom) -> Int
-
-@target(erlang)
-fn monotonic_millis() -> Int {
-  erlang_monotonic_time(atom.create("millisecond"))
 }
