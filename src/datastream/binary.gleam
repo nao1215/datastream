@@ -379,11 +379,19 @@ fn read_prefix(buffer: BitArray, size: Int) -> Int {
 ///
 /// If the input does not end with a delimiter, the trailing partial
 /// frame is emitted as the last element.
+///
+/// ## Panics
+///
+/// Panics at construction when `delimiter` is empty, since an empty
+/// delimiter matches everywhere without consuming any input.
 pub fn delimited(
   over stream: Stream(BitArray),
   on delimiter: BitArray,
 ) -> Stream(BitArray) {
-  delimited_active(stream, <<>>, delimiter, False, False, 0)
+  case delimiter {
+    <<>> -> panic as "datastream/binary.delimited: delimiter must not be empty"
+    _ -> delimited_active(stream, <<>>, delimiter, False, False, 0)
+  }
 }
 
 fn delimited_active(

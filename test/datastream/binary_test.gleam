@@ -290,6 +290,18 @@ pub fn fixed_size_panics_on_negative_size_test() {
   did_panic |> should.be_true
 }
 
+@target(erlang)
+pub fn delimited_panics_on_empty_delimiter_test() {
+  // An empty delimiter matches at every position without consuming
+  // input, so the stream would yield empty frames forever.
+  let did_panic =
+    panicked(fn() {
+      let _result = binary.delimited(from_list([<<1, 2, 3>>]), on: <<>>)
+      Nil
+    })
+  did_panic |> should.be_true
+}
+
 // --- checked variants (#189) -------------------------------------------
 
 pub fn length_prefixed_checked_ok_decodes_one_byte_prefix_test() {
