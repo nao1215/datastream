@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Breaking: remove `from_result` in favor of `once`, and `bridge_subject_stream` in favor of `to_list` followed by `from_list` for finite input. Remove `take_checked` and `drop_checked`; the remaining operations continue to treat negative counts as zero. Remove public target markers and parallel default constants.
 - Breaking: remove `each_ordered` and its variants, which ran side effects concurrently without guaranteeing their order. Use `map_ordered` followed by sequential `each` for effects that must follow input order, or `each_unordered` for concurrent effects.
 - Breaking: make `bytes`, `fixed_size`, and `delimited` yield Result elements. Rename the `IncompleteFrame` error type to `BinaryError` and add `UnalignedChunk`. Binary parsers reject a whole non-byte-aligned chunk, close the latest upstream continuation, and end after one error.
+- Breaking: represent `BinaryError.IncompleteFrame.expected` and `FrameTooLarge.claimed` as `#(high_32_bits, low_32_bits)` so eight-byte lengths remain exact on JavaScript. `got` and `max` remain `Int` byte counts.
 - Breaking: make `broadcast_bounded` return a construction Result and consumers with Result elements. On overflow, discard queued values, close the upstream, and report `QueueLimitExceeded` once to each active consumer. It no longer panics on overflow.
 - Breaking: validate timer durations, rate counts, frame-size limits, and binary delimiters at construction. Rename `rate_limit` labels to `up_to` and `every`. Timed operations return Result values; `timeout` permits zero for an immediate poll.
 
@@ -34,6 +35,11 @@ datastream.from_list([1, 2, 3])
 ### Fixed
 
 - Close the remaining interruption signal when the main stream finishes, using the signal's latest state without closing the completed main stream again.
+- Preserve broadcast cancellations made inside source callbacks and finish overflow cleanup before error notification. A nested read with no queued value cancels that consumer while the upstream is busy.
+- Traverse large broadcast consumer lists without growing the JavaScript stack, and discard empty chunks from delimiter carry buffers.
+- Compare eight-byte declared lengths with the frame-size limit exactly, before consuming payload chunks, and preserve the full length in errors.
+- Keep `sample` and `window_time` elements in the window where their upstream pull returned when downstream consumption pauses.
+- Close the latest continuation when a JavaScript iterator is returned from inside a source callback. Reject a nested `next()` with a `TypeError` promise without repeating the upstream pull or stopping the outer call.
 
 ### Documentation
 

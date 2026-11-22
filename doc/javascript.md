@@ -39,4 +39,6 @@ This prints `A` and `B`. Breaking out of the loop calls the iterator's `return()
 
 An adapter is a single-use iterator: calling `[Symbol.asyncIterator]()` returns the same iterator. Call `to_async_iterable` again to start another run of a replayable stream. Shared `broadcast`, `broadcast_bounded`, and `unzip` consumers remain single-use even when wrapped in a new adapter.
 
+If a source callback calls `return()`, the outer `next()` finishes with `done: true`. Cleanup uses the latest continuation after the callback returns, or the resource's normal cleanup if it returns `Done`. Calling `next()` from inside a pull returns a promise rejected with `TypeError`; it does not repeat the upstream pull or stop the outer call.
+
 The adapter also implements `throw(error)`: it closes the stream and, when cleanup returns normally, returns a rejected promise. A thrown pull callback attempts cleanup before rejecting `next()`. Cleanup after a callback exception is best-effort. In particular, an exception from `close` can make an iterator method throw synchronously and can replace an earlier error.

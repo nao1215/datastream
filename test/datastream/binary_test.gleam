@@ -90,7 +90,7 @@ pub fn length_prefixed_incomplete_payload_emits_error_test() {
   |> datastream.length_prefixed(prefix_size: 1, max_frame_size: 16_777_216)
   |> should.be_ok
   |> datastream.to_list
-  |> should.equal([Error(datastream.IncompleteFrame(expected: 2, got: 1))])
+  |> should.equal([Error(datastream.IncompleteFrame(expected: #(0, 2), got: 1))])
 }
 
 pub fn length_prefixed_incomplete_prefix_emits_error_test() {
@@ -98,7 +98,7 @@ pub fn length_prefixed_incomplete_prefix_emits_error_test() {
   |> datastream.length_prefixed(prefix_size: 2, max_frame_size: 16_777_216)
   |> should.be_ok
   |> datastream.to_list
-  |> should.equal([Error(datastream.IncompleteFrame(expected: 2, got: 1))])
+  |> should.equal([Error(datastream.IncompleteFrame(expected: #(0, 2), got: 1))])
 }
 
 pub fn length_prefixed_short_payload_after_full_frame_test() {
@@ -111,7 +111,7 @@ pub fn length_prefixed_short_payload_after_full_frame_test() {
   |> datastream.to_list
   |> should.equal([
     Ok(<<65>>),
-    Error(datastream.IncompleteFrame(expected: 200, got: 5)),
+    Error(datastream.IncompleteFrame(expected: #(0, 200), got: 5)),
   ])
 }
 
@@ -361,7 +361,7 @@ pub fn length_prefixed_rejects_oversized_frame_claim_test() {
   |> should.be_ok
   |> datastream.to_list
   |> should.equal([
-    Error(datastream.FrameTooLarge(claimed: 999_999_999, max: 1024)),
+    Error(datastream.FrameTooLarge(claimed: #(0, 999_999_999), max: 1024)),
   ])
 }
 
@@ -433,7 +433,7 @@ pub fn length_prefixed_ends_after_frame_too_large_across_chunks_test() {
   |> datastream.length_prefixed(prefix_size: 1, max_frame_size: 2)
   |> should.be_ok
   |> datastream.to_list
-  |> should.equal([Error(datastream.FrameTooLarge(claimed: 5, max: 2))])
+  |> should.equal([Error(datastream.FrameTooLarge(claimed: #(0, 5), max: 2))])
 }
 
 pub fn length_prefixed_ends_after_frame_too_large_in_one_chunk_test() {
@@ -441,7 +441,7 @@ pub fn length_prefixed_ends_after_frame_too_large_in_one_chunk_test() {
   |> datastream.length_prefixed(prefix_size: 1, max_frame_size: 2)
   |> should.be_ok
   |> datastream.to_list
-  |> should.equal([Error(datastream.FrameTooLarge(claimed: 5, max: 2))])
+  |> should.equal([Error(datastream.FrameTooLarge(claimed: #(0, 5), max: 2))])
 }
 
 pub fn length_prefixed_closes_upstream_after_frame_too_large_test() {
@@ -459,7 +459,7 @@ pub fn length_prefixed_closes_upstream_after_frame_too_large_test() {
   |> datastream.length_prefixed(prefix_size: 1, max_frame_size: 2)
   |> should.be_ok
   |> datastream.to_list
-  |> should.equal([Error(datastream.FrameTooLarge(claimed: 5, max: 2))])
+  |> should.equal([Error(datastream.FrameTooLarge(claimed: #(0, 5), max: 2))])
   read(closed) |> should.equal(1)
 }
 
@@ -471,7 +471,7 @@ pub fn length_prefixed_frames_split_over_many_chunks_test() {
   |> should.equal([
     Ok(<<1, 2, 3>>),
     Ok(<<9>>),
-    Error(datastream.IncompleteFrame(expected: 2, got: 1)),
+    Error(datastream.IncompleteFrame(expected: #(0, 2), got: 1)),
   ])
 }
 

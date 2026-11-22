@@ -1001,14 +1001,16 @@ fn stream_interrupt_pull_stream(
 
 // --- broadcast and unzip ----------------------------------------------------
 
-// Running state owns the latest upstream and each consumer's queue.
-// Failed state keeps only a terminal value and consumers still owed it.
+// Pulling and Closing leave the in-flight upstream with the outer callback.
+// Failed exposes a terminal value only after that callback has returned.
 type BroadcastState(a) {
   BroadcastRunning(
     upstream: Option(Stream(a)),
     consumers: List(Consumer(a)),
     policy: QueuePolicy(a),
   )
+  BroadcastPulling(consumers: List(Consumer(a)), policy: QueuePolicy(a))
+  BroadcastClosing(terminal: a, pending: List(Int))
   BroadcastFailed(terminal: a, pending: List(Int))
 }
 
@@ -1035,6 +1037,8 @@ type ConsumerPull(a) {
 ///
 /// Close a consumer by consuming it to completion or through an early-ending operation. If the upstream is still active, closing all consumers closes its latest continuation. A non-positive consumer count closes the upstream immediately and returns an empty list; a fresh lazy resource remains unopened.
 ///
+/// If an upstream callback reads another consumer, that consumer can return a queued value. If its queue is empty while an upstream pull or close is in progress, the nested read ends and cancels that consumer. Cancellations made inside callbacks remain effective when the outer pull returns.
+///
 /// ## Panics
 ///
 /// On Erlang, consume each returned stream in the process that called `broadcast`. Reading it in another process panics because its shared state belongs to the creating process.
@@ -1049,6 +1053,8 @@ pub fn broadcast(over stream: Stream(a), into count: Int) -> List(Stream(a)) {
 /// Each consumer yields `Ok` values until an upstream element would overflow another active consumer's queue. At that point, discard every queue and the triggering element, close the latest upstream continuation, and emit one `QueueLimitExceeded` error to each active consumer. Each consumer ends after its error. A consumer stopped before notification receives no further elements.
 ///
 /// The error identifies the first overflowing consumer by its zero-based index. All consumers share one run and must follow `broadcast`'s ownership rules.
+///
+/// Finish upstream cleanup before making the error available. A consumer cancelled during cleanup receives no error. Nested reads follow `broadcast`'s rules.
 ///
 /// ## Panics
 ///
@@ -1122,16 +1128,27 @@ fn stream_broadcast_pull(
   case ref.get(state_ref) {
     Error(Nil) -> Done
     Ok(BroadcastFailed(terminal, pending)) ->
-      case list.contains(pending, consumer_id) {
-        False -> Done
-        True -> {
-          stream_broadcast_remove_pending(
-            state_ref,
-            terminal,
-            pending,
-            consumer_id,
-          )
-          Next(terminal, empty())
+      stream_broadcast_emit_terminal(state_ref, terminal, pending, consumer_id)
+    Ok(BroadcastClosing(terminal, pending)) -> {
+      ref.set(
+        state_ref,
+        BroadcastClosing(
+          terminal:,
+          pending: list.filter(pending, fn(index) { index != consumer_id }),
+        ),
+      )
+      Done
+    }
+    Ok(BroadcastPulling(consumers, policy)) ->
+      case stream_pop_queued(consumers, consumer_id) {
+        InactiveConsumer -> Done
+        QueuedElement(element, consumers) -> {
+          ref.set(state_ref, BroadcastPulling(consumers:, policy:))
+          Next(element, stream_broadcast_consumer(state_ref, consumer_id))
+        }
+        WaitingConsumer -> {
+          stream_broadcast_finish(state_ref, consumer_id)
+          Done
         }
       }
     Ok(BroadcastRunning(upstream, consumers, policy)) ->
@@ -1165,41 +1182,129 @@ fn stream_broadcast_pull_source(
       stream_broadcast_finish(state_ref, consumer_id)
       Done
     }
-    Some(upstream) ->
-      case pull(upstream) {
-        Done -> {
+    Some(upstream) -> {
+      ref.set(state_ref, BroadcastPulling(consumers:, policy:))
+      stream_broadcast_after_pull(state_ref, consumer_id, pull(upstream))
+    }
+  }
+}
+
+// The callback may cancel consumers or pop their queues. Commit against
+// that latest state, retaining sole ownership of the returned continuation.
+fn stream_broadcast_after_pull(
+  state_ref: Ref(BroadcastState(a)),
+  consumer_id: Int,
+  step: Step(a, Stream(a)),
+) -> Step(a, Stream(a)) {
+  case ref.get(state_ref), step {
+    Ok(BroadcastPulling(consumers, policy)), Done -> {
+      let consumers = stream_broadcast_cancel(consumers, consumer_id)
+      case list.any(consumers, fn(consumer) { consumer.active }) {
+        True ->
           ref.set(
             state_ref,
             BroadcastRunning(upstream: None, consumers:, policy:),
           )
-          stream_broadcast_finish(state_ref, consumer_id)
+        False -> ref.delete(state_ref)
+      }
+      Done
+    }
+    Ok(BroadcastPulling(consumers, policy)), Next(element, rest) ->
+      case list.any(consumers, fn(consumer) { consumer.active }) {
+        False -> {
+          ref.delete(state_ref)
+          close(rest)
           Done
         }
-        Next(element, rest) ->
-          case stream_check_queue_bound(consumers, consumer_id, policy) {
-            None -> {
-              let consumers =
-                stream_enqueue_for_others(consumers, consumer_id, element)
-              ref.set(
-                state_ref,
-                BroadcastRunning(upstream: Some(rest), consumers:, policy:),
-              )
-              Next(element, stream_broadcast_consumer(state_ref, consumer_id))
-            }
-            Some(terminal) -> {
-              let pending = stream_broadcast_active_consumers(consumers)
-              // Remove the puller and all upstream references before cleanup.
-              stream_broadcast_remove_pending(
-                state_ref,
-                terminal,
-                pending,
-                consumer_id,
-              )
-              close(rest)
-              Next(terminal, empty())
-            }
-          }
+        True ->
+          stream_broadcast_commit(
+            state_ref,
+            consumer_id,
+            consumers,
+            policy,
+            element,
+            rest,
+          )
       }
+    Error(Nil), Done
+    | Ok(BroadcastRunning(..)), Done
+    | Ok(BroadcastClosing(..)), Done
+    | Ok(BroadcastFailed(..)), Done
+    -> Done
+    Error(Nil), Next(_, rest)
+    | Ok(BroadcastRunning(..)), Next(_, rest)
+    | Ok(BroadcastClosing(..)), Next(_, rest)
+    | Ok(BroadcastFailed(..)), Next(_, rest)
+    -> {
+      close(rest)
+      Done
+    }
+  }
+}
+
+fn stream_broadcast_commit(
+  state_ref: Ref(BroadcastState(a)),
+  consumer_id: Int,
+  consumers: List(Consumer(a)),
+  policy: QueuePolicy(a),
+  element: a,
+  rest: Stream(a),
+) -> Step(a, Stream(a)) {
+  case stream_check_queue_bound(consumers, consumer_id, policy) {
+    None -> {
+      let current_active = case list.drop(consumers, consumer_id) {
+        [consumer, ..] -> consumer.active
+        [] -> False
+      }
+      let consumers = stream_enqueue_for_others(consumers, consumer_id, element)
+      ref.set(
+        state_ref,
+        BroadcastRunning(upstream: Some(rest), consumers:, policy:),
+      )
+      case current_active {
+        True -> Next(element, stream_broadcast_consumer(state_ref, consumer_id))
+        False -> Done
+      }
+    }
+    Some(terminal) -> {
+      // Keep the current consumer pending so cleanup can cancel it too.
+      ref.set(
+        state_ref,
+        BroadcastClosing(
+          terminal:,
+          pending: stream_broadcast_active_consumers(consumers),
+        ),
+      )
+      close(rest)
+      case ref.get(state_ref) {
+        Ok(BroadcastClosing(terminal, pending)) ->
+          stream_broadcast_emit_terminal(
+            state_ref,
+            terminal,
+            pending,
+            consumer_id,
+          )
+        Error(Nil)
+        | Ok(BroadcastRunning(..))
+        | Ok(BroadcastPulling(..))
+        | Ok(BroadcastFailed(..)) -> Done
+      }
+    }
+  }
+}
+
+// Called only after cleanup returns, or for an already published failure.
+fn stream_broadcast_emit_terminal(
+  state_ref: Ref(BroadcastState(a)),
+  terminal: a,
+  pending: List(Int),
+  consumer_id: Int,
+) -> Step(a, Stream(a)) {
+  let notify = list.contains(pending, consumer_id)
+  stream_broadcast_remove_pending(state_ref, terminal, pending, consumer_id)
+  case notify {
+    True -> Next(terminal, empty())
+    False -> Done
   }
 }
 
@@ -1236,14 +1341,24 @@ fn stream_broadcast_finish(
     Error(Nil) -> Nil
     Ok(BroadcastFailed(terminal, pending)) ->
       stream_broadcast_remove_pending(state_ref, terminal, pending, consumer_id)
+    Ok(BroadcastClosing(terminal, pending)) ->
+      ref.set(
+        state_ref,
+        BroadcastClosing(
+          terminal:,
+          pending: list.filter(pending, fn(index) { index != consumer_id }),
+        ),
+      )
+    Ok(BroadcastPulling(consumers, policy)) ->
+      ref.set(
+        state_ref,
+        BroadcastPulling(
+          consumers: stream_broadcast_cancel(consumers, consumer_id),
+          policy:,
+        ),
+      )
     Ok(BroadcastRunning(upstream, consumers, policy)) -> {
-      let consumers =
-        list.index_map(consumers, fn(consumer, index) {
-          case index == consumer_id {
-            True -> Consumer(front: [], back: [], size: 0, active: False)
-            False -> consumer
-          }
-        })
+      let consumers = stream_broadcast_cancel(consumers, consumer_id)
       case list.any(consumers, fn(consumer) { consumer.active }), upstream {
         True, _ ->
           ref.set(state_ref, BroadcastRunning(upstream:, consumers:, policy:))
@@ -1257,9 +1372,29 @@ fn stream_broadcast_finish(
   }
 }
 
+fn stream_broadcast_cancel(
+  consumers: List(Consumer(a)),
+  consumer_id: Int,
+) -> List(Consumer(a)) {
+  list.index_map(consumers, fn(consumer, index) {
+    case index == consumer_id {
+      True -> Consumer(front: [], back: [], size: 0, active: False)
+      False -> consumer
+    }
+  })
+}
+
 fn stream_pop_queued(
   consumers: List(Consumer(a)),
   consumer_id: Int,
+) -> ConsumerPull(a) {
+  stream_pop_queued_loop(consumers, consumer_id, [])
+}
+
+fn stream_pop_queued_loop(
+  consumers: List(Consumer(a)),
+  consumer_id: Int,
+  reversed_prefix: List(Consumer(a)),
 ) -> ConsumerPull(a) {
   case consumers, consumer_id {
     [], _ -> InactiveConsumer
@@ -1273,18 +1408,18 @@ fn stream_pop_queued(
         [element, ..front] -> {
           let consumer =
             Consumer(..consumer, front:, back:, size: consumer.size - 1)
-          QueuedElement(element, [consumer, ..rest])
+          let consumers =
+            list.fold(reversed_prefix, [consumer, ..rest], list.prepend)
+          QueuedElement(element, consumers)
         }
         [] -> WaitingConsumer
       }
     }
     [consumer, ..rest], _ ->
-      case stream_pop_queued(rest, consumer_id - 1) {
-        QueuedElement(element, rest) ->
-          QueuedElement(element, [consumer, ..rest])
-        InactiveConsumer -> InactiveConsumer
-        WaitingConsumer -> WaitingConsumer
-      }
+      stream_pop_queued_loop(rest, consumer_id - 1, [
+        consumer,
+        ..reversed_prefix
+      ])
   }
 }
 
@@ -2039,7 +2174,11 @@ fn text_split_active(state: Split) -> Stream(String) {
 }
 
 fn text_split_pull(state: Split) -> Step(String, Stream(String)) {
-  let window = text_reverse_concat([state.unscanned, ..state.recent])
+  let chunks = case state.unscanned {
+    "" -> state.recent
+    chunk -> [chunk, ..state.recent]
+  }
+  let window = text_reverse_concat(chunks)
   case string.split_once(window, on: state.delimiter) {
     Ok(#(before, after)) ->
       Next(
@@ -2057,7 +2196,7 @@ fn text_split_pull(state: Split) -> Step(String, Stream(String)) {
     Error(_) -> {
       let #(recent, older) =
         core_keep_newest(
-          [state.unscanned, ..state.recent],
+          chunks,
           holding: string.byte_size(state.delimiter) - 1,
           measured_by: string.byte_size,
         )
@@ -2514,12 +2653,14 @@ fn binary_bytes_pull(
 /// Describe malformed binary input encountered while consuming a stream.
 ///
 /// `IncompleteFrame` reports a short prefix or payload. `FrameTooLarge` reports a length above the configured limit. `UnalignedChunk` reports an input chunk whose bit count is not divisible by eight. Each error ends the framing stream.
+///
+/// `expected` and `claimed` are unsigned lengths represented as `#(high_32_bits, low_32_bits)`. This preserves all eight-byte prefix values on both targets. A length of three is `#(0, 3)`; `#(2_097_152, 1)` is 2^53 + 1. `got` and `max` remain byte counts as `Int` values.
 pub type BinaryError {
-  IncompleteFrame(expected: Int, got: Int)
+  IncompleteFrame(expected: #(Int, Int), got: Int)
   /// The prefix declared a payload length exceeding `max_frame_size`.
   /// The stream ends after this element, since the bytes that follow
   /// can no longer be split into frames.
-  FrameTooLarge(claimed: Int, max: Int)
+  FrameTooLarge(claimed: #(Int, Int), max: Int)
   UnalignedChunk(bit_size: Int)
 }
 
@@ -2573,7 +2714,7 @@ type LengthPrefixed {
     buffered: Buffered,
     prefix_size: Int,
     max_frame_size: Int,
-    payload_size: Option(Int),
+    payload_size: Option(#(Int, Int)),
   )
 }
 
@@ -2588,10 +2729,11 @@ fn binary_length_prefixed_active(
 fn binary_length_prefixed_pull(
   state: LengthPrefixed,
 ) -> Step(Result(BitArray, BinaryError), Stream(Result(BitArray, BinaryError))) {
-  let needed = option.unwrap(state.payload_size, state.prefix_size)
-  case state.buffered.size >= needed {
-    True -> {
-      case binary_take_bytes(state.buffered, needed) {
+  let needed = option.unwrap(state.payload_size, #(0, state.prefix_size))
+  case binary_length_exceeds(needed, state.buffered.size) {
+    False -> {
+      let count = needed.0 * 4_294_967_296 + needed.1
+      case binary_take_bytes(state.buffered, count) {
         Ok(#(bytes, buffered)) ->
           binary_length_prefixed_frame(
             LengthPrefixed(..state, buffered:),
@@ -2603,7 +2745,7 @@ fn binary_length_prefixed_pull(
         }
       }
     }
-    False ->
+    True ->
       case binary_refill(state.source, state.buffered), state.buffered.size {
         Ok(Some(#(source, buffered))), _ ->
           binary_length_prefixed_pull(
@@ -2622,39 +2764,49 @@ fn binary_length_prefixed_frame(
   state: LengthPrefixed,
   bytes: BitArray,
 ) -> Step(Result(BitArray, BinaryError), Stream(Result(BitArray, BinaryError))) {
-  case state.payload_size, binary_read_prefix(bytes, state.prefix_size) {
-    Some(_), _ ->
+  case state.payload_size {
+    Some(_) ->
       Next(
         Ok(bytes),
         binary_length_prefixed_active(
           LengthPrefixed(..state, payload_size: None),
         ),
       )
-    None, length if length > state.max_frame_size -> {
-      // The bytes after an oversized prefix cannot be framed again,
-      // so the stream ends here.
-      close(state.source)
-      Next(
-        Error(FrameTooLarge(claimed: length, max: state.max_frame_size)),
-        empty(),
-      )
+    None -> {
+      let length = binary_read_prefix(bytes, state.prefix_size)
+      case binary_length_exceeds(length, state.max_frame_size) {
+        True -> {
+          // The bytes after an oversized prefix cannot be framed again,
+          // so the stream ends here.
+          close(state.source)
+          Next(
+            Error(FrameTooLarge(claimed: length, max: state.max_frame_size)),
+            empty(),
+          )
+        }
+        False ->
+          binary_length_prefixed_pull(
+            LengthPrefixed(..state, payload_size: Some(length)),
+          )
+      }
     }
-    None, length ->
-      binary_length_prefixed_pull(
-        LengthPrefixed(..state, payload_size: Some(length)),
-      )
   }
 }
 
-fn binary_read_prefix(buffer: BitArray, size: Int) -> Int {
+fn binary_length_exceeds(length: #(Int, Int), limit: Int) -> Bool {
+  let high = limit / 4_294_967_296
+  let low = limit % 4_294_967_296
+  length.0 > high || { length.0 == high && length.1 > low }
+}
+
+fn binary_read_prefix(buffer: BitArray, size: Int) -> #(Int, Int) {
   case size, buffer {
-    1, <<count:size(8), _:bits>> -> count
-    2, <<count:size(16), _:bits>> -> count
-    4, <<count:size(32), _:bits>> -> count
-    // Two 32-bit halves: a single 64-bit integer segment is truncated on
-    // the JavaScript target. The result on Erlang is identical.
-    8, <<high:size(32), low:size(32), _:bits>> -> high * 4_294_967_296 + low
-    _, _ -> 0
+    1, <<count:size(8), _:bits>> -> #(0, count)
+    2, <<count:size(16), _:bits>> -> #(0, count)
+    4, <<count:size(32), _:bits>> -> #(0, count)
+    // Keep both words exact on JavaScript, including lengths above 2^53.
+    8, <<high:size(32), low:size(32), _:bits>> -> #(high, low)
+    _, _ -> #(0, 0)
   }
 }
 
@@ -2723,7 +2875,11 @@ fn binary_delimited_active(
 fn binary_delimited_pull(
   state: Delimited,
 ) -> Step(Result(BitArray, BinaryError), Stream(Result(BitArray, BinaryError))) {
-  let window = bit_array.concat(list.reverse([state.unscanned, ..state.recent]))
+  let chunks = case state.unscanned {
+    <<>> -> state.recent
+    chunk -> [chunk, ..state.recent]
+  }
+  let window = bit_array.concat(list.reverse(chunks))
   let delimiter_size = bit_array.byte_size(state.delimiter)
   case binary_find_delimiter(window, state.delimiter, 0) {
     Ok(position) ->
@@ -2750,7 +2906,7 @@ fn binary_delimited_pull(
     Error(_) -> {
       let #(recent, older) =
         core_keep_newest(
-          [state.unscanned, ..state.recent],
+          chunks,
           holding: delimiter_size - 1,
           measured_by: bit_array.byte_size,
         )
@@ -3249,17 +3405,25 @@ fn time_throttle_step(
 @target(erlang)
 type SampleState(a) {
   SampleState(
-    upstream: Pump(a),
+    upstream: Pump(#(Int, a)),
     window_start: Int,
     latest: Option(a),
+    pending: Option(#(Int, a)),
     upstream_done: Bool,
   )
+}
+
+@target(erlang)
+fn time_with_timestamps(stream: Stream(a)) -> Stream(#(Int, a)) {
+  map(over: stream, with: fn(element) { #(pump_now_milliseconds(), element) })
 }
 
 @target(erlang)
 /// Emit the most recent element at each time-window boundary.
 ///
 /// Available on Erlang only. Require `milliseconds` in `1..4_294_967_295`. A window with no input emits nothing. If the source finishes with a pending value, emit it immediately without waiting for the next boundary. Pull the source in a worker, so it must not require the caller's process.
+///
+/// Assign elements to windows by the time their upstream pull returns in the worker. A downstream pause does not change that assignment. Windows include their starting time and exclude their ending time.
 pub fn sample(
   over stream: Stream(a),
   every milliseconds: Int,
@@ -3267,7 +3431,7 @@ pub fn sample(
   use _ <- result.try(time_check_duration("sample", milliseconds, 1))
   Ok({
     use upstream, now <- pump_on_first_pull(
-      stream,
+      time_with_timestamps(stream),
       context: "datastream.sample",
     )
     time_sample_step(
@@ -3275,6 +3439,7 @@ pub fn sample(
         upstream:,
         window_start: now,
         latest: None,
+        pending: None,
         upstream_done: False,
       ),
       milliseconds,
@@ -3309,37 +3474,50 @@ fn time_sample_wait(
   milliseconds: Int,
 ) -> Step(a, Stream(a)) {
   let deadline = state.window_start + milliseconds
-  case
-    pump_next(state.upstream, within: time_milliseconds_until(deadline)),
-    state.latest
-  {
-    #(upstream, Ok(Element(element))), _ ->
+  let #(upstream, reply) = case state.pending {
+    Some(element) -> #(state.upstream, Ok(Element(element)))
+    None -> pump_next(state.upstream, within: time_milliseconds_until(deadline))
+  }
+  let state = SampleState(..state, upstream:, pending: None)
+  case reply, state.latest {
+    Ok(Element(#(arrived, element))), _ if arrived < deadline ->
       time_sample_wait(
-        SampleState(..state, upstream:, latest: Some(element)),
+        SampleState(..state, latest: Some(element)),
         milliseconds,
       )
-    #(_, Ok(Exhausted)), None -> Done
-    #(upstream, Ok(Exhausted)), Some(value) ->
+    Ok(Element(element)), _ ->
+      time_sample_finish_window(
+        SampleState(..state, pending: Some(element)),
+        milliseconds,
+      )
+    Ok(Exhausted), None -> Done
+    Ok(Exhausted), Some(value) ->
       Next(
         value,
         time_build_sample_stream(
-          SampleState(..state, upstream:, latest: None, upstream_done: True),
+          SampleState(..state, latest: None, upstream_done: True),
           milliseconds,
         ),
       )
-    #(upstream, Error(_)), None ->
-      time_sample_wait(
-        SampleState(..state, upstream:, window_start: deadline),
-        milliseconds,
-      )
-    #(upstream, Error(_)), Some(value) ->
-      Next(
-        value,
-        time_build_sample_stream(
-          SampleState(..state, upstream:, window_start: deadline, latest: None),
-          milliseconds,
-        ),
-      )
+    Error(Nil), _ -> time_sample_finish_window(state, milliseconds)
+  }
+}
+
+@target(erlang)
+fn time_sample_finish_window(
+  state: SampleState(a),
+  milliseconds: Int,
+) -> Step(a, Stream(a)) {
+  let next_state =
+    SampleState(
+      ..state,
+      window_start: state.window_start + milliseconds,
+      latest: None,
+    )
+  case state.latest {
+    None -> time_sample_wait(next_state, milliseconds)
+    Some(value) ->
+      Next(value, time_build_sample_stream(next_state, milliseconds))
   }
 }
 
@@ -3425,9 +3603,10 @@ fn time_rate_limit_step(
 @target(erlang)
 type WindowState(a) {
   WindowState(
-    upstream: Pump(a),
+    upstream: Pump(#(Int, a)),
     buffer: List(a),
     window_start: Int,
+    pending: Option(#(Int, a)),
     upstream_done: Bool,
   )
 }
@@ -3436,6 +3615,8 @@ type WindowState(a) {
 /// Collect each time window's elements into a list.
 ///
 /// Available on Erlang only. Require `milliseconds` in `1..4_294_967_295`. Empty windows emit empty lists. On source completion, immediately emit a nonempty final batch; completion alone does not add an empty batch. Pull the source in a worker, so it must not require the caller's process.
+///
+/// Assign elements to windows by the time their upstream pull returns in the worker. A downstream pause does not change that assignment. Windows include their starting time and exclude their ending time.
 pub fn window_time(
   over stream: Stream(a),
   span milliseconds: Int,
@@ -3443,7 +3624,7 @@ pub fn window_time(
   use _ <- result.try(time_check_duration("window_time", milliseconds, 1))
   Ok({
     use upstream, now <- pump_on_first_pull(
-      stream,
+      time_with_timestamps(stream),
       context: "datastream.window_time",
     )
     time_window_step(
@@ -3451,6 +3632,7 @@ pub fn window_time(
         upstream:,
         buffer: [],
         window_start: now,
+        pending: None,
         upstream_done: False,
       ),
       milliseconds,
@@ -3482,35 +3664,50 @@ fn time_window_step(
       )
     False, _ -> {
       let deadline = state.window_start + milliseconds
-      case
-        pump_next(state.upstream, within: time_milliseconds_until(deadline))
-      {
-        #(upstream, Ok(Element(element))) ->
+      let #(upstream, reply) = case state.pending {
+        Some(element) -> #(state.upstream, Ok(Element(element)))
+        None ->
+          pump_next(state.upstream, within: time_milliseconds_until(deadline))
+      }
+      let state = WindowState(..state, upstream:, pending: None)
+      case reply {
+        Ok(Element(#(arrived, element))) if arrived < deadline ->
           time_window_step(
-            WindowState(..state, upstream:, buffer: [element, ..state.buffer]),
+            WindowState(..state, buffer: [element, ..state.buffer]),
             milliseconds,
           )
-        #(upstream, Ok(Exhausted)) ->
-          time_window_step(
-            WindowState(..state, upstream:, upstream_done: True),
+        Ok(Element(element)) ->
+          time_window_finish_window(
+            WindowState(..state, pending: Some(element)),
             milliseconds,
           )
-        #(upstream, Error(_)) ->
-          Next(
-            list.reverse(state.buffer),
-            time_build_window_stream(
-              WindowState(
-                ..state,
-                upstream:,
-                buffer: [],
-                window_start: deadline,
-              ),
-              milliseconds,
-            ),
+        Ok(Exhausted) ->
+          time_window_step(
+            WindowState(..state, upstream_done: True),
+            milliseconds,
           )
+        Error(Nil) -> time_window_finish_window(state, milliseconds)
       }
     }
   }
+}
+
+@target(erlang)
+fn time_window_finish_window(
+  state: WindowState(a),
+  milliseconds: Int,
+) -> Step(List(a), Stream(List(a))) {
+  Next(
+    list.reverse(state.buffer),
+    time_build_window_stream(
+      WindowState(
+        ..state,
+        buffer: [],
+        window_start: state.window_start + milliseconds,
+      ),
+      milliseconds,
+    ),
+  )
 }
 
 @target(erlang)
@@ -4456,6 +4653,8 @@ pub type AsyncIterable(a)
 @target(javascript)
 type PullState(a) {
   Open(Stream(a))
+  Pulling(Stream(a))
+  Stopping(Stream(a))
   Closed
 }
 
@@ -4464,6 +4663,7 @@ type PullState(a) {
 fn async_make_async_iterable(
   next: fn() -> Result(a, Nil),
   async_stop: fn() -> Nil,
+  failed: fn() -> Nil,
 ) -> AsyncIterable(a)
 
 @target(javascript)
@@ -4472,36 +4672,64 @@ fn async_make_async_iterable(
 /// Available on JavaScript only. With callbacks that return normally, each `next()` performs a synchronous pull and returns a promise. The returned iterator is single-use.
 ///
 /// Exhaustion closes a resource through its normal completion path. `return()`, a loop's `break`, and `throw()` close the remaining stream once when callbacks return normally. Cleanup after a callback exception is best-effort. See the [JavaScript guide](javascript.html) for an executable host example.
+///
+/// If a source callback calls `return()`, the in-flight `next()` finishes with `done: true` and closes the latest continuation when the callback returns. A nested `next()` during a pull returns a promise rejected with `TypeError`, leaving the outer pull active.
 pub fn to_async_iterable(stream: Stream(a)) -> AsyncIterable(a) {
   let state = ref.new(Open(stream))
-  async_make_async_iterable(fn() { async_pull_next(state) }, fn() {
-    async_stop(state)
-  })
+  async_make_async_iterable(
+    fn() { async_pull_next(state) },
+    fn() { async_stop(state) },
+    fn() { async_fail(state) },
+  )
 }
 
 @target(javascript)
 fn async_pull_next(state: Ref(PullState(a))) -> Result(a, Nil) {
   case ref.get(state) {
-    Error(_) | Ok(Closed) -> Error(Nil)
-    Ok(Open(stream)) ->
-      case pull(stream) {
-        Done -> {
+    Error(_) | Ok(Closed) | Ok(Pulling(_)) | Ok(Stopping(_)) -> Error(Nil)
+    Ok(Open(stream)) -> {
+      ref.set(state, Pulling(stream))
+      let step = pull(stream)
+      case step, ref.get(state) {
+        Done, _ -> {
           ref.set(state, Closed)
           Error(Nil)
         }
-        Next(element, rest) -> {
+        Next(element, rest), Ok(Pulling(_)) -> {
           ref.set(state, Open(rest))
           Ok(element)
         }
+        Next(_, rest), Error(_)
+        | Next(_, rest), Ok(Stopping(_))
+        | Next(_, rest), Ok(Closed)
+        | Next(_, rest), Ok(Open(_))
+        -> {
+          ref.set(state, Closed)
+          close(rest)
+          Error(Nil)
+        }
       }
+    }
   }
 }
 
 @target(javascript)
 fn async_stop(state: Ref(PullState(a))) -> Nil {
   case ref.get(state) {
-    Error(_) | Ok(Closed) -> Nil
+    Error(_) | Ok(Closed) | Ok(Stopping(_)) -> Nil
+    Ok(Pulling(stream)) -> ref.set(state, Stopping(stream))
     Ok(Open(stream)) -> {
+      ref.set(state, Closed)
+      close(stream)
+    }
+  }
+}
+
+@target(javascript)
+fn async_fail(state: Ref(PullState(a))) -> Nil {
+  case ref.get(state) {
+    Error(_) | Ok(Closed) -> Nil
+    Ok(Open(stream)) | Ok(Pulling(stream)) | Ok(Stopping(stream)) -> {
       ref.set(state, Closed)
       close(stream)
     }

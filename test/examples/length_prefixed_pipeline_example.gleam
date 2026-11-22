@@ -69,5 +69,5 @@ pub fn length_prefixed_pipeline_truncated_input_test() {
   |> datastream.length_prefixed(prefix_size: 4, max_frame_size: 4096)
   |> should.be_ok
   |> datastream.collect_result
-  |> should.equal(Error(datastream.IncompleteFrame(expected: 99, got: 5)))
+  |> should.equal(Error(datastream.IncompleteFrame(expected: #(0, 99), got: 5)))
 }

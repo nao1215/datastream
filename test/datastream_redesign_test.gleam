@@ -233,7 +233,7 @@ pub fn zero_frame_limit_accepts_empty_frames_then_closes_on_nonempty_test() {
   datastream.to_list(frames)
   |> should.equal([
     Ok(<<>>),
-    Error(datastream.FrameTooLarge(claimed: 1, max: 0)),
+    Error(datastream.FrameTooLarge(claimed: #(0, 1), max: 0)),
   ])
   history(events) |> should.equal([Opened, Pulled(0), Closed(1)])
   ref.delete(events)
