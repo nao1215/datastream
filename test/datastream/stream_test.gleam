@@ -578,6 +578,172 @@ pub fn interrupt_when_signal_wins_over_take_test() {
   |> should.equal([0, 1])
 }
 
+type ResourceEvent {
+  Opened(String)
+  Pulled(String, Int)
+  Closed(String, Int)
+}
+
+fn logged_resource(
+  elements: List(a),
+  name: String,
+  log: ref.Ref(List(ResourceEvent)),
+) -> Stream(a) {
+  source.resource(
+    open: fn() {
+      ref.set(log, [Opened(name), ..read(log)])
+      #(0, elements)
+    },
+    next: fn(state) {
+      let #(index, remaining) = state
+      ref.set(log, [Pulled(name, index), ..read(log)])
+      case remaining {
+        [] -> Done
+        [element, ..rest] -> Next(element:, state: #(index + 1, rest))
+      }
+    },
+    close: fn(state) { ref.set(log, [Closed(name, state.0), ..read(log)]) },
+  )
+}
+
+pub fn interrupt_when_empty_body_closes_signal_latest_state_test() {
+  let log = ref.new([])
+  let interrupted =
+    logged_resource([], "body", log)
+    |> stream.interrupt_when(signal: logged_resource([False], "signal", log))
+
+  assert read(log) == []
+  assert fold.to_list(interrupted) == []
+  let events = list.reverse(read(log))
+  ref.delete(log)
+  assert events
+    == [
+      Opened("signal"),
+      Pulled("signal", 0),
+      Opened("body"),
+      Pulled("body", 0),
+      Closed("body", 0),
+      Closed("signal", 1),
+    ]
+}
+
+pub fn interrupt_when_finished_body_closes_signal_latest_state_test() {
+  let log = ref.new([])
+  let values =
+    logged_resource([42], "body", log)
+    |> stream.interrupt_when(signal: logged_resource(
+      [False, False, False],
+      "signal",
+      log,
+    ))
+    |> fold.to_list
+
+  assert values == [42]
+  let events = list.reverse(read(log))
+  ref.delete(log)
+  assert events
+    == [
+      Opened("signal"),
+      Pulled("signal", 0),
+      Opened("body"),
+      Pulled("body", 0),
+      Pulled("signal", 1),
+      Pulled("body", 1),
+      Closed("body", 1),
+      Closed("signal", 2),
+    ]
+}
+
+pub fn interrupt_when_finished_signal_is_not_pulled_or_closed_again_test() {
+  let log = ref.new([])
+  let values =
+    logged_resource([10, 20, 30], "body", log)
+    |> stream.interrupt_when(signal: logged_resource([False], "signal", log))
+    |> fold.to_list
+
+  assert values == [10, 20, 30]
+  let events = list.reverse(read(log))
+  ref.delete(log)
+  assert events
+    == [
+      Opened("signal"),
+      Pulled("signal", 0),
+      Opened("body"),
+      Pulled("body", 0),
+      Pulled("signal", 1),
+      Closed("signal", 1),
+      Pulled("body", 1),
+      Pulled("body", 2),
+      Pulled("body", 3),
+      Closed("body", 3),
+    ]
+}
+
+pub fn interrupt_when_true_signal_closes_both_latest_states_test() {
+  let log = ref.new([])
+  let values =
+    logged_resource([10, 20], "body", log)
+    |> stream.interrupt_when(signal: logged_resource(
+      [False, True, False],
+      "signal",
+      log,
+    ))
+    |> fold.to_list
+
+  assert values == [10]
+  let events = list.reverse(read(log))
+  ref.delete(log)
+  assert events
+    == [
+      Opened("signal"),
+      Pulled("signal", 0),
+      Opened("body"),
+      Pulled("body", 0),
+      Pulled("signal", 1),
+      Closed("signal", 2),
+      Closed("body", 1),
+    ]
+}
+
+pub fn interrupt_when_immediate_true_signal_does_not_open_body_test() {
+  let log = ref.new([])
+  let values =
+    logged_resource([10, 20], "body", log)
+    |> stream.interrupt_when(signal: logged_resource([True], "signal", log))
+    |> fold.to_list
+
+  assert values == []
+  let events = list.reverse(read(log))
+  ref.delete(log)
+  assert events == [Opened("signal"), Pulled("signal", 0), Closed("signal", 1)]
+}
+
+pub fn interrupt_when_downstream_take_closes_both_latest_states_test() {
+  let log = ref.new([])
+  let values =
+    logged_resource([10, 20], "body", log)
+    |> stream.interrupt_when(signal: logged_resource(
+      [False, False],
+      "signal",
+      log,
+    ))
+    |> stream.take(up_to: 1)
+    |> fold.to_list
+
+  assert values == [10]
+  let events = list.reverse(read(log))
+  ref.delete(log)
+  assert events
+    == [
+      Opened("signal"),
+      Pulled("signal", 0),
+      Opened("body"),
+      Pulled("body", 0),
+      Closed("signal", 1),
+      Closed("body", 1),
+    ]
+}
+
 pub fn broadcast_two_consumers_see_same_elements_test() {
   let assert [a, b] = stream.broadcast(over: from_list([1, 2, 3]), into: 2)
   fold.to_list(a) |> should.equal([1, 2, 3])

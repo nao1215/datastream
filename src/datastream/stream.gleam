@@ -828,7 +828,13 @@ fn interrupt_pull_stream(
 ) -> Step(a, Stream(a)) {
   case datastream.pull(stream) {
     Next(element, rest) -> Next(element, interrupt_active(rest, signal))
-    Done -> Done
+    Done -> {
+      case signal {
+        Some(signal) -> datastream.close(signal)
+        None -> Nil
+      }
+      Done
+    }
   }
 }
 
