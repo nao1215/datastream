@@ -63,8 +63,13 @@ fn buffer_chunk(buffered: Buffered, chunk: BitArray) -> Buffered {
 }
 
 // Split off the first `count` bytes. The caller checks that
-// `buffered.size >= count`.
-fn take_bytes(buffered: Buffered, count: Int) -> #(BitArray, Buffered) {
+// `buffered.size >= count`. `size` counts a partial trailing byte as a
+// whole one, so a chunk that is not byte-aligned can leave fewer than
+// `count` whole bytes; that is an `Error`, and the framer then ends.
+fn take_bytes(
+  buffered: Buffered,
+  count: Int,
+) -> Result(#(BitArray, Buffered), Nil) {
   let joined = case bit_array.byte_size(buffered.joined) >= count {
     True -> buffered.joined
     False -> bit_array.concat([buffered.joined, ..list.reverse(buffered.later)])
@@ -74,11 +79,9 @@ fn take_bytes(buffered: Buffered, count: Int) -> #(BitArray, Buffered) {
     False -> []
   }
   case joined {
-    <<taken:bytes-size(count), rest:bytes>> -> #(
-      taken,
-      Buffered(joined: rest, later:, size: buffered.size - count),
-    )
-    _ -> #(<<>>, buffered)
+    <<taken:bytes-size(count), rest:bits>> ->
+      Ok(#(taken, Buffered(joined: rest, later:, size: buffered.size - count)))
+    _ -> Error(Nil)
   }
 }
 
@@ -273,27 +276,13 @@ fn length_prefixed_pull(
   let needed = option.unwrap(state.payload_size, state.prefix_size)
   case state.buffered.size >= needed {
     True -> {
-      let #(bytes, buffered) = take_bytes(state.buffered, needed)
-      let state = LengthPrefixed(..state, buffered:)
-      case state.payload_size, read_prefix(bytes, state.prefix_size) {
-        Some(_), _ ->
-          Next(
-            Ok(bytes),
-            length_prefixed_active(LengthPrefixed(..state, payload_size: None)),
-          )
-        None, length if length > state.max_frame_size -> {
-          // The bytes after an oversized prefix cannot be framed again,
-          // so the stream ends here.
+      case take_bytes(state.buffered, needed) {
+        Ok(#(bytes, buffered)) ->
+          length_prefixed_frame(LengthPrefixed(..state, buffered:), bytes)
+        Error(_) -> {
           datastream.close(state.source)
-          Next(
-            Error(FrameTooLarge(claimed: length, max: state.max_frame_size)),
-            core.empty(),
-          )
+          Done
         }
-        None, length ->
-          length_prefixed_pull(
-            LengthPrefixed(..state, payload_size: Some(length)),
-          )
       }
     }
     False ->
@@ -304,6 +293,34 @@ fn length_prefixed_pull(
         None, got ->
           Next(Error(IncompleteFrame(expected: needed, got:)), core.empty())
       }
+  }
+}
+
+// Handle `bytes` just taken from the buffer: a payload, or a prefix.
+fn length_prefixed_frame(
+  state: LengthPrefixed,
+  bytes: BitArray,
+) -> Step(
+  Result(BitArray, IncompleteFrame),
+  Stream(Result(BitArray, IncompleteFrame)),
+) {
+  case state.payload_size, read_prefix(bytes, state.prefix_size) {
+    Some(_), _ ->
+      Next(
+        Ok(bytes),
+        length_prefixed_active(LengthPrefixed(..state, payload_size: None)),
+      )
+    None, length if length > state.max_frame_size -> {
+      // The bytes after an oversized prefix cannot be framed again,
+      // so the stream ends here.
+      datastream.close(state.source)
+      Next(
+        Error(FrameTooLarge(claimed: length, max: state.max_frame_size)),
+        core.empty(),
+      )
+    }
+    None, length ->
+      length_prefixed_pull(LengthPrefixed(..state, payload_size: Some(length)))
   }
 }
 
@@ -518,8 +535,14 @@ fn fixed_size_pull(
 ) -> Step(BitArray, Stream(BitArray)) {
   case buffered.size >= size {
     True -> {
-      let #(frame, buffered) = take_bytes(buffered, size)
-      Next(frame, fixed_size_active(source, buffered, size))
+      case take_bytes(buffered, size) {
+        Ok(#(frame, buffered)) ->
+          Next(frame, fixed_size_active(source, buffered, size))
+        Error(_) -> {
+          datastream.close(source)
+          Done
+        }
+      }
     }
     False ->
       case refill(source, buffered) {

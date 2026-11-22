@@ -3,6 +3,7 @@ import datastream/binary
 import datastream/fold
 import datastream/internal/ref
 import datastream/source
+import datastream/stream
 import gleam/list
 import gleeunit
 import gleeunit/should
@@ -498,4 +499,40 @@ fn read(cell: ref.Ref(a)) -> a {
     Ok(value) -> value
     Error(_) -> panic as "test ref was deleted"
   }
+}
+
+// --- framers end on input that is not byte-aligned ----------------------------
+
+pub fn fixed_size_ends_on_non_byte_aligned_chunks_test() {
+  // `take` keeps a regression from hanging the suite.
+  from_list([<<1:4>>, <<2:4>>])
+  |> binary.fixed_size(size: 1)
+  |> stream.take(up_to: 10)
+  |> fold.to_list
+  |> should.equal([])
+}
+
+pub fn length_prefixed_ends_on_a_non_byte_aligned_chunk_test() {
+  from_list([<<1:4>>])
+  |> binary.length_prefixed(prefix_size: 1)
+  |> stream.take(up_to: 10)
+  |> fold.to_list
+  |> should.equal([])
+}
+
+pub fn delimited_ends_on_a_non_byte_aligned_chunk_test() {
+  from_list([<<1:4>>])
+  |> binary.delimited(on: <<0>>)
+  |> stream.take(up_to: 10)
+  |> fold.count
+  |> fn(count) { count <= 1 }
+  |> should.be_true
+}
+
+pub fn bytes_ends_on_a_non_byte_aligned_chunk_test() {
+  from_list([<<1:4>>])
+  |> binary.bytes
+  |> stream.take(up_to: 10)
+  |> fold.to_list
+  |> should.equal([])
 }
