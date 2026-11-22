@@ -15,6 +15,9 @@ import datastream/erlang/internal/event_log
 import datastream/erlang/internal/watchdog.{Crashed, Finished}
 
 @target(erlang)
+import datastream/erlang/par
+
+@target(erlang)
 import datastream/erlang/source as esource
 
 @target(erlang)
@@ -164,4 +167,40 @@ pub fn timeout_closes_the_upstream_when_the_deadline_trips_test() {
   event_log.drain(log, within: 500)
   |> event_log.count_closes
   |> should.equal(1)
+}
+
+// --- a subject stream pulled in a worker fails loudly ----------------------
+
+@target(erlang)
+fn two_message_subject_stream() -> Stream(Int) {
+  let subject = process.new_subject()
+  process.send(subject, 1)
+  process.send(subject, 2)
+  let remaining = process.new_subject()
+  process.send(remaining, 2)
+  esource.from_subject(from: subject, while: fn() {
+    case process.receive(from: remaining, within: 0) {
+      Ok(n) if n > 0 -> {
+        process.send(remaining, n - 1)
+        True
+      }
+      _ -> False
+    }
+  })
+}
+
+@target(erlang)
+pub fn throttle_of_a_subject_stream_panics_instead_of_hanging_test() {
+  watchdog.run(within: 3000, running: fn() {
+    two_message_subject_stream() |> time.throttle(every: 1) |> fold.to_list
+  })
+  |> should.equal(Crashed)
+}
+
+@target(erlang)
+pub fn merge_of_a_subject_stream_panics_instead_of_hanging_test() {
+  watchdog.run(within: 3000, running: fn() {
+    par.merge([two_message_subject_stream()]) |> fold.to_list
+  })
+  |> should.equal(Crashed)
 }
