@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- `erlang/par.map_*`, `each_*`, `merge`, `race`, the `erlang/time` combinators and `erlang/source.timeout` now re-raise a panic from the mapped function or an upstream in the process that runs the stream, after closing the upstreams and stopping the other workers. They used to end the stream early without saying so, or wait forever. `timeout` now reports an upstream panic as a panic, not as `Error(Nil)`.
+- `binary.length_prefixed` ends the stream after `FrameTooLarge` and closes the upstream, because the framing cannot be recovered. It used to read the rest of the oversized payload as new frames.
+- `binary.delimited(on: <<>>)` panics. It used to emit empty frames forever.
+- `erlang/par.merge`, `race`, the `erlang/time` combinators and `timeout` start their workers on the first pull, so building a stream runs nothing and a stream can be run more than once. `race` keeps pulling the winner inside its worker.
+- `stream.broadcast` and `stream.unzip` consumers pulled from another process than the one that built them panic with a message that says so. They used to yield `Error(Nil)` or crash the worker.
+
+### Fixed
+
+- `stream.buffer` no longer pulls or closes an upstream again after it returned `Done`.
+- `stream.flat_map`, `stream.group_adjacent`, `text.lines` and `binary.length_prefixed` no longer overflow the JavaScript stack on long inputs.
+- `text.lines` is linear on JavaScript; a 400 KB chunk took 36 seconds.
+- `binary.fixed_size`, `length_prefixed`, `delimited`, `text.split` and `text.utf8_decode` build frames in linear time when data arrives in many small chunks.
+- `stream.broadcast`, `broadcast_bounded`, `unzip` and `stream.buffer` keep their queues in linear time, and `broadcast` and `unzip` free their state once every consumer is done.
+- `erlang/par.map_*` no longer take the caller's own `DOWN` messages, no longer hang when one worker crashes next to a fast result, and no longer leave results from an earlier run in the mailbox.
+- `erlang/source.timeout` pulls every element in one worker, so resources owned by that process survive between elements, and closes the upstream when the deadline passes.
+- The `erlang/time` combinators send one element per request instead of filling the caller's mailbox.
+- `datastream/erlang/internal/pump` is no longer published as a documented module.
+- The documentation now says that a negative count in `take` and `drop` is treated as 0.
+
 ## [0.20.0] - 2026-11-19
 
 ### Added
