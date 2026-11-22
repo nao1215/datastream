@@ -671,7 +671,7 @@ fn dedupe_pull(stream: Stream(a), last: Option(a)) -> Step(a, Stream(a)) {
 pub fn buffer(over stream: Stream(a), prefetch capacity: Int) -> Stream(a) {
   case capacity < 1 {
     True -> panic as "datastream/stream.buffer: capacity must be >= 1"
-    False -> buffer_active(stream, [], 0, capacity)
+    False -> new_buffer(stream, capacity)
   }
 }
 
@@ -692,49 +692,76 @@ pub fn buffer_checked(
 ) -> Result(Stream(a), StreamArgError) {
   case capacity < 1 {
     True -> Error(NotPositive(function: "buffer", given: capacity))
-    False -> Ok(buffer_active(stream, [], 0, capacity))
+    False -> Ok(new_buffer(stream, capacity))
   }
 }
 
-fn buffer_active(
-  stream: Stream(a),
-  buf: List(a),
-  count: Int,
-  capacity: Int,
-) -> Stream(a) {
-  datastream.make(
-    pull: fn() { buffer_pull(stream, buf, count, capacity) },
-    close: fn() { datastream.close(stream) },
+fn new_buffer(stream: Stream(a), capacity: Int) -> Stream(a) {
+  buffer_active(BufferState(
+    upstream: Some(stream),
+    front: [],
+    back: [],
+    count: 0,
+    capacity:,
+  ))
+}
+
+// The prefetched elements live in a two-list queue: `front` in pull
+// order and `back` in reverse, so pushing and popping are amortised
+// O(1). `upstream` becomes `None` once it returns `Done`, after which
+// it is neither pulled nor closed again.
+type BufferState(a) {
+  BufferState(
+    upstream: Option(Stream(a)),
+    front: List(a),
+    back: List(a),
+    count: Int,
+    capacity: Int,
   )
 }
 
-fn buffer_pull(
-  stream: Stream(a),
-  buf: List(a),
-  count: Int,
-  capacity: Int,
-) -> Step(a, Stream(a)) {
-  let #(buf, stream, count) = buffer_fill(stream, buf, count, capacity)
-  case buf {
+fn buffer_active(state: BufferState(a)) -> Stream(a) {
+  datastream.make(pull: fn() { buffer_pull(state) }, close: fn() {
+    case state.upstream {
+      Some(upstream) -> datastream.close(upstream)
+      None -> Nil
+    }
+  })
+}
+
+fn buffer_pull(state: BufferState(a)) -> Step(a, Stream(a)) {
+  let state = buffer_fill(state)
+  let #(front, back) = case state.front {
+    [] -> #(list.reverse(state.back), [])
+    _ -> #(state.front, state.back)
+  }
+  case front {
     [] -> Done
-    [head, ..tail] ->
-      Next(head, buffer_active(stream, tail, count - 1, capacity))
+    [head, ..front] ->
+      Next(
+        head,
+        buffer_active(
+          BufferState(..state, front:, back:, count: state.count - 1),
+        ),
+      )
   }
 }
 
-fn buffer_fill(
-  stream: Stream(a),
-  buf: List(a),
-  count: Int,
-  capacity: Int,
-) -> #(List(a), Stream(a), Int) {
-  case count >= capacity {
-    True -> #(buf, stream, count)
-    False ->
-      case datastream.pull(stream) {
+fn buffer_fill(state: BufferState(a)) -> BufferState(a) {
+  case state.upstream, state.count >= state.capacity {
+    None, _ | _, True -> state
+    Some(upstream), False ->
+      case datastream.pull(upstream) {
         Next(element, rest) ->
-          buffer_fill(rest, list.append(buf, [element]), count + 1, capacity)
-        Done -> #(buf, stream, count)
+          buffer_fill(
+            BufferState(
+              ..state,
+              upstream: Some(rest),
+              back: [element, ..state.back],
+              count: state.count + 1,
+            ),
+          )
+        Done -> BufferState(..state, upstream: None)
       }
   }
 }

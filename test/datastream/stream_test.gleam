@@ -1,6 +1,7 @@
 import datastream.{type Stream, Done, Next}
 import datastream/chunk.{type Chunk}
 import datastream/fold
+import datastream/internal/ref
 import datastream/source
 import datastream/stream
 import gleam/list
@@ -934,4 +935,47 @@ fn panicked(thunk: fn() -> Nil) -> Bool {
     Ok(_) -> False
     Error(_) -> True
   }
+}
+
+// --- buffer does not touch an upstream that returned Done --------------------
+
+fn logged_counter(
+  upto limit: Int,
+  log log: ref.Ref(List(String)),
+) -> Stream(Int) {
+  source.resource(
+    open: fn() {
+      ref.set(log, ["open", ..ref.get(log)])
+      0
+    },
+    next: fn(i) {
+      ref.set(log, ["next", ..ref.get(log)])
+      case i < limit {
+        True -> Next(element: i, state: i + 1)
+        False -> Done
+      }
+    },
+    close: fn(_) { ref.set(log, ["close", ..ref.get(log)]) },
+  )
+}
+
+pub fn buffer_does_not_pull_or_close_upstream_after_done_test() {
+  let log = ref.new([])
+  logged_counter(upto: 2, log: log)
+  |> stream.buffer(prefetch: 5)
+  |> fold.to_list
+  |> should.equal([0, 1])
+  list.reverse(ref.get(log))
+  |> should.equal(["open", "next", "next", "next", "close"])
+}
+
+pub fn buffer_take_after_upstream_done_closes_once_test() {
+  let log = ref.new([])
+  logged_counter(upto: 2, log: log)
+  |> stream.buffer(prefetch: 5)
+  |> stream.take(up_to: 1)
+  |> fold.to_list
+  |> should.equal([0])
+  list.reverse(ref.get(log))
+  |> should.equal(["open", "next", "next", "next", "close"])
 }

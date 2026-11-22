@@ -48,3 +48,10 @@ pub fn binary_fixed_size_on_one_hundred_thousand_chunks_test() {
   |> fold.count
   |> should.equal(100_000)
 }
+
+pub fn buffer_with_large_prefetch_is_linear_test() {
+  source.range(from: 0, to: 100_000)
+  |> stream.buffer(prefetch: 50_000)
+  |> fold.count
+  |> should.equal(100_000)
+}
