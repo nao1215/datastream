@@ -9,15 +9,12 @@
 //// Instead, every event is sent to a shared `Subject` owned by the
 //// test process; the test drains it after the pipeline is done.
 
-@target(javascript)
-pub const beam_only_marker: String =
-  "test/datastream/erlang/internal/event_log is BEAM-only"
-
 @target(erlang)
 import datastream.{type Stream, Done, Next}
 
-@target(erlang)
-import datastream/source
+@target(javascript)
+pub const beam_only_marker: String =
+  "test/datastream/erlang/internal/event_log is BEAM-only"
 
 @target(erlang)
 import gleam/erlang/process.{type Subject}
@@ -41,7 +38,7 @@ pub fn counted_resource(
   named name: String,
   log log: Subject(Event),
 ) -> Stream(a) {
-  source.resource(
+  datastream.resource(
     open: fn() {
       process.send(log, ResourceOpen(name))
       elements

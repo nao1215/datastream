@@ -12,18 +12,6 @@ import datastream/erlang/internal/event_log
 import datastream/erlang/internal/watchdog.{Crashed, Finished}
 
 @target(erlang)
-import datastream/erlang/par
-
-@target(erlang)
-import datastream/fold
-
-@target(erlang)
-import datastream/source
-
-@target(erlang)
-import datastream/stream
-
-@target(erlang)
 import gleam/erlang/process
 
 @target(erlang)
@@ -72,9 +60,10 @@ fn keeps_callers_down_message(
 @target(erlang)
 pub fn map_unordered_leaves_callers_down_messages_alone_test() {
   keeps_callers_down_message(fn(f) {
-    source.range(from: 0, to: 10)
-    |> par.map_unordered(with: f)
-    |> fold.to_list
+    datastream.range(from: 0, to: 10)
+    |> datastream.map_unordered(with: f, max_workers: 4, max_buffer: 16)
+    |> should.be_ok
+    |> datastream.to_list
   })
   |> should.equal(Finished(#([0, 1, 2, 3, 4, 5, 6, 7, 8, 9], True)))
 }
@@ -82,9 +71,10 @@ pub fn map_unordered_leaves_callers_down_messages_alone_test() {
 @target(erlang)
 pub fn map_ordered_leaves_callers_down_messages_alone_test() {
   keeps_callers_down_message(fn(f) {
-    source.range(from: 0, to: 10)
-    |> par.map_ordered(with: f)
-    |> fold.to_list
+    datastream.range(from: 0, to: 10)
+    |> datastream.map_ordered(with: f, max_workers: 4, max_buffer: 16)
+    |> should.be_ok
+    |> datastream.to_list
   })
   |> should.equal(Finished(#([0, 1, 2, 3, 4, 5, 6, 7, 8, 9], True)))
 }
@@ -105,13 +95,14 @@ fn crash_first_sleep_rest(x: Int) -> Int {
 @target(erlang)
 pub fn map_unordered_with_crash_next_to_a_fast_result_does_not_hang_test() {
   watchdog.run(within: 3000, running: fn() {
-    source.from_list([0, 1])
-    |> par.map_unordered_with(
+    datastream.from_list([0, 1])
+    |> datastream.map_unordered(
       with: crash_first_sleep_rest,
       max_workers: 2,
       max_buffer: 2,
     )
-    |> fold.to_list
+    |> should.be_ok
+    |> datastream.to_list
   })
   |> should.equal(Crashed)
 }
@@ -119,13 +110,14 @@ pub fn map_unordered_with_crash_next_to_a_fast_result_does_not_hang_test() {
 @target(erlang)
 pub fn map_ordered_with_crash_next_to_a_fast_result_does_not_hang_test() {
   watchdog.run(within: 3000, running: fn() {
-    source.from_list([0, 1])
-    |> par.map_ordered_with(
+    datastream.from_list([0, 1])
+    |> datastream.map_ordered(
       with: crash_first_sleep_rest,
       max_workers: 2,
       max_buffer: 2,
     )
-    |> fold.to_list
+    |> should.be_ok
+    |> datastream.to_list
   })
   |> should.equal(Crashed)
 }
@@ -136,7 +128,7 @@ pub fn map_ordered_with_closes_upstream_when_f_panics_test() {
   let outcome =
     watchdog.run(within: 3000, running: fn() {
       event_log.counted_resource(numbers(10), named: "src", log: log)
-      |> par.map_ordered_with(
+      |> datastream.map_ordered(
         with: fn(x) {
           case x {
             2 -> panic as "f(2)"
@@ -146,7 +138,8 @@ pub fn map_ordered_with_closes_upstream_when_f_panics_test() {
         max_workers: 1,
         max_buffer: 1,
       )
-      |> fold.to_list
+      |> should.be_ok
+      |> datastream.to_list
     })
   outcome |> should.equal(Crashed)
   event_log.drain(log, within: 100)
@@ -160,13 +153,18 @@ pub fn map_ordered_with_closes_upstream_when_f_panics_test() {
 pub fn map_unordered_rerun_after_early_exit_sees_only_its_own_results_test() {
   watchdog.run(within: 3000, running: fn() {
     let s =
-      source.range(from: 0, to: 10)
-      |> par.map_unordered(with: fn(x) {
-        process.sleep(x * 5)
-        x
-      })
-    let first = s |> stream.take(up_to: 1) |> fold.to_list
-    let second = fold.to_list(s) |> list.sort(int.compare)
+      datastream.range(from: 0, to: 10)
+      |> datastream.map_unordered(
+        with: fn(x) {
+          process.sleep(x * 5)
+          x
+        },
+        max_workers: 4,
+        max_buffer: 16,
+      )
+      |> should.be_ok
+    let first = s |> datastream.take(up_to: 1) |> datastream.to_list
+    let second = datastream.to_list(s) |> list.sort(int.compare)
     process.sleep(100)
     #(first, second, watchdog.mailbox_is_empty())
   })
@@ -175,8 +173,15 @@ pub fn map_unordered_rerun_after_early_exit_sees_only_its_own_results_test() {
 
 @target(erlang)
 pub fn map_ordered_runs_in_a_process_other_than_the_builder_test() {
-  let s = source.range(from: 0, to: 5) |> par.map_ordered(with: fn(x) { x * 2 })
-  watchdog.run(within: 3000, running: fn() { fold.to_list(s) })
+  let s =
+    datastream.range(from: 0, to: 5)
+    |> datastream.map_ordered(
+      with: fn(x) { x * 2 },
+      max_workers: 4,
+      max_buffer: 16,
+    )
+    |> should.be_ok
+  watchdog.run(within: 3000, running: fn() { datastream.to_list(s) })
   |> should.equal(Finished([0, 2, 4, 6, 8]))
 }
 
@@ -184,13 +189,18 @@ pub fn map_ordered_runs_in_a_process_other_than_the_builder_test() {
 
 @target(erlang)
 fn panicking_source() {
-  source.unfold(from: Nil, with: fn(_) { panic as "upstream" })
+  datastream.unfold(from: Nil, with: fn(_) { panic as "upstream" })
 }
 
 @target(erlang)
 pub fn merge_reports_a_panicking_upstream_test() {
   watchdog.run(within: 3000, running: fn() {
-    par.merge([source.from_list([1]), panicking_source()]) |> fold.to_list
+    datastream.merge(
+      [datastream.from_list([1]), panicking_source()],
+      max_buffer: 16,
+    )
+    |> should.be_ok
+    |> datastream.to_list
   })
   |> should.equal(Crashed)
 }
@@ -200,12 +210,16 @@ pub fn merge_closes_the_other_upstreams_when_one_panics_test() {
   let log = event_log.new_log()
   let outcome =
     watchdog.run(within: 3000, running: fn() {
-      par.merge([
-        event_log.counted_resource(numbers(1000), named: "a", log: log)
-          |> stream.tap(fn(_) { process.sleep(1) }),
-        panicking_source(),
-      ])
-      |> fold.to_list
+      datastream.merge(
+        [
+          event_log.counted_resource(numbers(1000), named: "a", log: log)
+            |> datastream.tap(fn(_) { process.sleep(1) }),
+          panicking_source(),
+        ],
+        max_buffer: 16,
+      )
+      |> should.be_ok
+      |> datastream.to_list
     })
   outcome |> should.equal(Crashed)
   event_log.drain(log, within: 200)
@@ -216,7 +230,8 @@ pub fn merge_closes_the_other_upstreams_when_one_panics_test() {
 @target(erlang)
 pub fn race_reports_a_panicking_upstream_test() {
   watchdog.run(within: 3000, running: fn() {
-    par.race([source.empty(), panicking_source()]) |> fold.to_list
+    datastream.race([datastream.empty(), panicking_source()])
+    |> datastream.to_list
   })
   |> should.equal(Crashed)
 }
@@ -225,7 +240,11 @@ pub fn race_reports_a_panicking_upstream_test() {
 pub fn merge_does_not_pull_before_a_terminal_runs_test() {
   let seen = process.new_subject()
   let _merged =
-    par.merge([source.from_list([1, 2]) |> stream.tap(process.send(seen, _))])
+    datastream.merge(
+      [datastream.from_list([1, 2]) |> datastream.tap(process.send(seen, _))],
+      max_buffer: 16,
+    )
+    |> should.be_ok
   process.receive(from: seen, within: 100) |> should.equal(Error(Nil))
 }
 
@@ -233,16 +252,23 @@ pub fn merge_does_not_pull_before_a_terminal_runs_test() {
 pub fn race_does_not_pull_before_a_terminal_runs_test() {
   let seen = process.new_subject()
   let _raced =
-    par.race([source.from_list([1, 2]) |> stream.tap(process.send(seen, _))])
+    datastream.race([
+      datastream.from_list([1, 2]) |> datastream.tap(process.send(seen, _)),
+    ])
   process.receive(from: seen, within: 100) |> should.equal(Error(Nil))
 }
 
 @target(erlang)
 pub fn merge_can_run_twice_test() {
   watchdog.run(within: 3000, running: fn() {
-    let s = par.merge([source.from_list([1, 2]), source.from_list([3])])
-    let first = fold.to_list(s) |> list.sort(int.compare)
-    let second = fold.to_list(s) |> list.sort(int.compare)
+    let s =
+      datastream.merge(
+        [datastream.from_list([1, 2]), datastream.from_list([3])],
+        max_buffer: 16,
+      )
+      |> should.be_ok
+    let first = datastream.to_list(s) |> list.sort(int.compare)
+    let second = datastream.to_list(s) |> list.sort(int.compare)
     #(first, second)
   })
   |> should.equal(Finished(#([1, 2, 3], [1, 2, 3])))
@@ -251,8 +277,8 @@ pub fn merge_can_run_twice_test() {
 @target(erlang)
 pub fn race_can_run_twice_test() {
   watchdog.run(within: 3000, running: fn() {
-    let s = par.race([source.from_list([1, 2])])
-    #(fold.to_list(s), fold.to_list(s))
+    let s = datastream.race([datastream.from_list([1, 2])])
+    #(datastream.to_list(s), datastream.to_list(s))
   })
   |> should.equal(Finished(#([1, 2], [1, 2])))
 }
@@ -261,9 +287,13 @@ pub fn race_can_run_twice_test() {
 pub fn merge_leaves_no_messages_after_early_exit_test() {
   watchdog.run(within: 3000, running: fn() {
     let taken =
-      par.merge([source.repeat(1), source.repeat(2)])
-      |> stream.take(up_to: 5)
-      |> fold.count
+      datastream.merge(
+        [datastream.repeat(1), datastream.repeat(2)],
+        max_buffer: 16,
+      )
+      |> should.be_ok
+      |> datastream.take(up_to: 5)
+      |> datastream.count
     process.sleep(100)
     #(taken, watchdog.mailbox_is_empty())
   })
@@ -278,7 +308,7 @@ fn rescue(thunk: fn() -> a) -> Result(a, Nil)
 
 @target(erlang)
 fn panics_after_four() {
-  source.unfold(from: 0, with: fn(i) {
+  datastream.unfold(from: 0, with: fn(i) {
     case i < 4 {
       True -> datastream.Next(i, i + 1)
       False -> panic as "upstream"
@@ -298,12 +328,13 @@ pub fn map_unordered_stops_its_tasks_when_the_upstream_panics_test() {
     let outcome =
       rescue(fn() {
         panics_after_four()
-        |> par.map_unordered_with(
+        |> datastream.map_unordered(
           with: slow_by_index,
           max_workers: 4,
           max_buffer: 4,
         )
-        |> fold.to_list
+        |> should.be_ok
+        |> datastream.to_list
       })
     process.sleep(500)
     #(outcome, watchdog.mailbox_is_empty())
@@ -317,11 +348,12 @@ pub fn each_unordered_stops_its_effects_when_the_upstream_panics_test() {
   let outcome =
     watchdog.run(within: 3000, running: fn() {
       panics_after_four()
-      |> par.each_unordered_with(
+      |> datastream.each_unordered(
         with: fn(x) { process.send(log, slow_by_index(x)) },
         max_workers: 4,
         max_buffer: 4,
       )
+      |> should.be_ok
     })
   outcome |> should.equal(Crashed)
   process.sleep(500)
@@ -333,11 +365,16 @@ pub fn map_tasks_stop_when_the_consuming_process_dies_test() {
   let log = process.new_subject()
   let consumer =
     process.spawn_unlinked(fn() {
-      source.range(from: 0, to: 4)
-      |> par.each_unordered(with: fn(x) {
-        process.sleep(200)
-        process.send(log, x)
-      })
+      datastream.range(from: 0, to: 4)
+      |> datastream.each_unordered(
+        with: fn(x) {
+          process.sleep(200)
+          process.send(log, x)
+        },
+        max_workers: 4,
+        max_buffer: 16,
+      )
+      |> should.be_ok
     })
   process.sleep(50)
   process.kill(consumer)

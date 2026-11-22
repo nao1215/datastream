@@ -58,8 +58,8 @@ raise_worker_crash(Context, Reason) ->
     erlang:error(#{
         gleam_error => panic,
         message => Message,
-        module => <<"datastream/erlang/internal/pump">>,
-        function => <<"raise_worker_crash">>,
+        module => <<"datastream">>,
+        function => <<"pump_raise_worker_crash">>,
         line => 0,
         reason => Reason
     }).

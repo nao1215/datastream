@@ -12,14 +12,12 @@
 //// The example uses a small hand-written parser so it stays
 //// self-contained.
 ////
-//// Cross-target: `text.utf8_decode`, `text.lines`, and
-//// `fold.collect_result` run on both the Erlang and JavaScript
+//// Cross-target: `datastream.utf8_decode`, `datastream.lines`, and
+//// `datastream.collect_result` run on both the Erlang and JavaScript
 //// targets.
 
-import datastream/fold
-import datastream/source
-import datastream/stream
-import datastream/text
+import datastream
+
 import gleam/int
 import gleam/string
 import gleeunit/should
@@ -47,7 +45,7 @@ pub fn run() -> Result(List(Record), ParseError) {
   // Bytes arrive in arbitrary chunks. The first chunk ends mid-line,
   // the second chunk completes that line and begins another.
   let chunks =
-    source.from_list([
+    datastream.from_list([
       <<"1 first record\n2 second">>,
       <<" record\n3 third record\n">>,
     ])
@@ -55,15 +53,15 @@ pub fn run() -> Result(List(Record), ParseError) {
   chunks
   // BitArray → Stream(String), dropping any UTF-8 decode errors.
   // Production code that needs to surface those errors should use
-  // `text.utf8_decode` and route the resulting `Stream(Result(...))`
-  // via `fold.partition_result` instead.
-  |> text.utf8_decode_lossy
+  // `datastream.utf8_decode` and route the resulting `Stream(Result(...))`
+  // via `datastream.partition_result` instead.
+  |> datastream.utf8_decode_lossy
   // Reassemble lines (handles the chunk-spanning record).
-  |> text.lines
+  |> datastream.lines
   // String → Result(Record, ParseError).
-  |> stream.map(with: parse_record)
+  |> datastream.map(with: parse_record)
   // Stop at the first parse failure.
-  |> fold.collect_result
+  |> datastream.collect_result
 }
 
 fn parse_record(line: String) -> Result(Record, ParseError) {

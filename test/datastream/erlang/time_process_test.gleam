@@ -1,36 +1,15 @@
 //// BEAM-only tests for how `datastream/erlang/time` and
-//// `datastream/erlang/source.timeout` use their pump process: no work
+//// `datastream/erlang/datastream.timeout` use their pump process: no work
 //// before a terminal runs, re-running, backpressure, and closing.
 
 @target(erlang)
 import datastream.{type Stream}
 
 @target(erlang)
-import datastream/chunk
-
-@target(erlang)
 import datastream/erlang/internal/event_log
 
 @target(erlang)
 import datastream/erlang/internal/watchdog.{Crashed, Finished}
-
-@target(erlang)
-import datastream/erlang/par
-
-@target(erlang)
-import datastream/erlang/source as esource
-
-@target(erlang)
-import datastream/erlang/time
-
-@target(erlang)
-import datastream/fold
-
-@target(erlang)
-import datastream/source
-
-@target(erlang)
-import datastream/stream
 
 @target(erlang)
 import gleam/erlang/process
@@ -48,13 +27,16 @@ pub const beam_only_marker: String =
 @target(erlang)
 fn combinators() -> List(fn(Stream(Int)) -> Stream(Int)) {
   [
-    time.throttle(_, every: 1),
-    time.debounce(_, quiet_for: 1),
-    time.sample(_, every: 5),
-    time.rate_limit(_, max_per_window: 100, window_ms: 10),
+    fn(stream) { datastream.throttle(stream, every: 1) |> should.be_ok },
+    fn(stream) { datastream.debounce(stream, quiet_for: 1) |> should.be_ok },
+    fn(stream) { datastream.sample(stream, every: 5) |> should.be_ok },
+    fn(stream) {
+      datastream.rate_limit(stream, up_to: 100, every: 10) |> should.be_ok
+    },
     fn(s) {
-      time.window_time(s, span: 5)
-      |> stream.flat_map(fn(c) { source.from_list(chunk.to_list(c)) })
+      datastream.window_time(s, span: 5)
+      |> should.be_ok
+      |> datastream.flat_map(fn(c) { datastream.from_list(c) })
     },
   ]
 }
@@ -64,8 +46,8 @@ pub fn time_combinators_do_not_pull_before_a_terminal_runs_test() {
   list.each(combinators(), fn(combinator) {
     let seen = process.new_subject()
     let _built =
-      source.from_list([1, 2])
-      |> stream.tap(process.send(seen, _))
+      datastream.from_list([1, 2])
+      |> datastream.tap(process.send(seen, _))
       |> combinator
     process.receive(from: seen, within: 50) |> should.equal(Error(Nil))
   })
@@ -75,9 +57,9 @@ pub fn time_combinators_do_not_pull_before_a_terminal_runs_test() {
 pub fn time_combinators_can_run_twice_test() {
   list.each(combinators(), fn(combinator) {
     watchdog.run(within: 3000, running: fn() {
-      let s = source.from_list([1, 2, 3]) |> combinator
-      let first = fold.to_list(s) != []
-      let second = fold.to_list(s) != []
+      let s = datastream.from_list([1, 2, 3]) |> combinator
+      let first = datastream.to_list(s) != []
+      let second = datastream.to_list(s) != []
       #(first, second)
     })
     |> should.equal(Finished(#(True, True)))
@@ -88,10 +70,11 @@ pub fn time_combinators_can_run_twice_test() {
 pub fn throttle_does_not_flood_the_mailbox_test() {
   watchdog.run(within: 3000, running: fn() {
     let taken =
-      source.repeat(1)
-      |> time.throttle(every: 200)
-      |> stream.take(up_to: 1)
-      |> fold.to_list
+      datastream.repeat(1)
+      |> datastream.throttle(every: 200)
+      |> should.be_ok
+      |> datastream.take(up_to: 1)
+      |> datastream.to_list
     process.sleep(100)
     #(taken, watchdog.mailbox_is_empty())
   })
@@ -101,14 +84,15 @@ pub fn throttle_does_not_flood_the_mailbox_test() {
 @target(erlang)
 pub fn throttle_reports_a_panicking_upstream_test() {
   watchdog.run(within: 3000, running: fn() {
-    source.unfold(from: Nil, with: fn(_) { panic as "upstream" })
-    |> time.throttle(every: 1)
-    |> fold.to_list
+    datastream.unfold(from: Nil, with: fn(_) { panic as "upstream" })
+    |> datastream.throttle(every: 1)
+    |> should.be_ok
+    |> datastream.to_list
   })
   |> should.equal(Crashed)
 }
 
-// --- source.timeout ------------------------------------------------------
+// --- datastream.timeout ------------------------------------------------------
 
 @target(erlang)
 pub fn timeout_pulls_every_element_in_one_process_test() {
@@ -117,7 +101,7 @@ pub fn timeout_pulls_every_element_in_one_process_test() {
   let pids = process.new_subject()
   let outcome =
     watchdog.run(within: 3000, running: fn() {
-      source.resource(
+      datastream.resource(
         open: fn() { 0 },
         next: fn(i) {
           process.send(pids, process.self())
@@ -128,8 +112,9 @@ pub fn timeout_pulls_every_element_in_one_process_test() {
         },
         close: fn(_) { Nil },
       )
-      |> esource.timeout(within: 500)
-      |> fold.to_list
+      |> datastream.timeout(within: 500)
+      |> should.be_ok
+      |> datastream.to_list
     })
   outcome |> should.equal(Finished([Ok(0), Ok(1), Ok(2)]))
   let seen = drain_pids(pids, [])
@@ -154,14 +139,15 @@ pub fn timeout_closes_the_upstream_when_the_deadline_trips_test() {
   let outcome =
     watchdog.run(within: 3000, running: fn() {
       event_log.counted_resource([1, 2, 3], named: "slow", log: log)
-      |> stream.tap(fn(x) {
+      |> datastream.tap(fn(x) {
         case x {
           2 -> process.sleep(200)
           _ -> Nil
         }
       })
-      |> esource.timeout(within: 50)
-      |> fold.to_list
+      |> datastream.timeout(within: 50)
+      |> should.be_ok
+      |> datastream.to_list
     })
   outcome |> should.equal(Finished([Ok(1), Error(Nil)]))
   event_log.drain(log, within: 500)
@@ -178,7 +164,7 @@ fn two_message_subject_stream() -> Stream(Int) {
   process.send(subject, 2)
   let remaining = process.new_subject()
   process.send(remaining, 2)
-  esource.from_subject(from: subject, while: fn() {
+  datastream.from_subject(from: subject, while: fn() {
     case process.receive(from: remaining, within: 0) {
       Ok(n) if n > 0 -> {
         process.send(remaining, n - 1)
@@ -192,7 +178,10 @@ fn two_message_subject_stream() -> Stream(Int) {
 @target(erlang)
 pub fn throttle_of_a_subject_stream_panics_instead_of_hanging_test() {
   watchdog.run(within: 3000, running: fn() {
-    two_message_subject_stream() |> time.throttle(every: 1) |> fold.to_list
+    two_message_subject_stream()
+    |> datastream.throttle(every: 1)
+    |> should.be_ok
+    |> datastream.to_list
   })
   |> should.equal(Crashed)
 }
@@ -200,7 +189,9 @@ pub fn throttle_of_a_subject_stream_panics_instead_of_hanging_test() {
 @target(erlang)
 pub fn merge_of_a_subject_stream_panics_instead_of_hanging_test() {
   watchdog.run(within: 3000, running: fn() {
-    par.merge([two_message_subject_stream()]) |> fold.to_list
+    datastream.merge([two_message_subject_stream()], max_buffer: 16)
+    |> should.be_ok
+    |> datastream.to_list
   })
   |> should.equal(Crashed)
 }

@@ -9,12 +9,9 @@
 //// Cross-target: every combinator used here runs on both the Erlang
 //// and JavaScript targets.
 
-import datastream/fold
-import datastream/source
-import datastream/stream
-import datastream/text
+import datastream
+
 import gleam/dict.{type Dict}
-import gleam/option.{type Option, None, Some}
 import gleam/string
 import gleeunit/should
 
@@ -39,19 +36,19 @@ pub type LevelCounts =
 /// Run the example pipeline against in-memory test fixtures and
 /// return the per-level counts. The shape mirrors what production
 /// code would write — only the source differs (real callers wire a
-/// `source.resource` over a file handle or socket).
+/// `datastream.resource` over a file handle or socket).
 pub fn run() -> LevelCounts {
-  // Real-world input arrives in arbitrary chunks. `text.lines` owns
+  // Real-world input arrives in arbitrary chunks. `datastream.lines` owns
   // the line-buffering, so callers never see a partial line.
   let chunks = [
     "INFO  user_id=42 logged in\nWARN  ", "user_id=42 retry\nERROR ",
     "user_id=99 timeout\nbogus line with no level\nINFO ", "user_id=42 ok\n",
   ]
 
-  source.from_list(chunks)
-  |> text.lines
-  |> stream.filter_map(with: parse_line)
-  |> fold.fold(from: dict.new(), with: bump)
+  datastream.from_list(chunks)
+  |> datastream.lines
+  |> datastream.filter_map(with: parse_line)
+  |> datastream.fold(from: dict.new(), with: bump)
 }
 
 fn bump(acc: LevelCounts, level: Level) -> LevelCounts {
@@ -62,14 +59,14 @@ fn bump(acc: LevelCounts, level: Level) -> LevelCounts {
   dict.insert(acc, level, current + 1)
 }
 
-fn parse_line(line: String) -> Option(Level) {
+fn parse_line(line: String) -> Result(Level, Nil) {
   // Lines that do not start with a recognised level are skipped via
   // `None`; `filter_map` drops them without emitting an element.
   case string.split_once(line, on: " ") {
-    Ok(#("INFO", _)) -> Some(Info)
-    Ok(#("WARN", _)) -> Some(Warn)
-    Ok(#("ERROR", _)) -> Some(LogError)
-    _ -> None
+    Ok(#("INFO", _)) -> Ok(Info)
+    Ok(#("WARN", _)) -> Ok(Warn)
+    Ok(#("ERROR", _)) -> Ok(LogError)
+    _ -> Error(Nil)
   }
 }
 

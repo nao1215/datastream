@@ -1,7 +1,7 @@
 //// Metamorphic relations for the chunk-boundary-aware parsers in
 //// `datastream/text` and `datastream/binary`.
 ////
-//// The exact output of `text.lines` or `binary.delimited` for a random
+//// The exact output of `datastream.lines` or `datastream.delimited` for a random
 //// input is not something a test can write down without re-implementing
 //// the parser, but one relation must always hold: the same input cut
 //// into chunks at different places yields the same elements. Real reads
@@ -9,10 +9,9 @@
 //// compares the one-chunk run with a run over a random re-chunking (and
 //// one with empty chunks mixed in).
 
-import datastream/binary
-import datastream/fold
-import datastream/source
-import datastream/text
+import datastream
+import gleeunit/should
+
 import gleam/bit_array
 import gleam/list
 import gleam/string
@@ -165,38 +164,54 @@ fn byte_relation(
 
 pub fn lines_is_invariant_under_rechunking_test() -> Nil {
   text_relation(fn(chunks) {
-    fold.to_list(text.lines(over: source.from_list(chunks)))
+    datastream.to_list(datastream.lines(over: datastream.from_list(chunks)))
   })
 }
 
 pub fn records_is_invariant_under_rechunking_test() -> Nil {
   text_relation(fn(chunks) {
-    fold.to_list(text.records(over: text.lines(over: source.from_list(chunks))))
+    datastream.to_list(
+      datastream.records(
+        over: datastream.lines(over: datastream.from_list(chunks)),
+      ),
+    )
   })
 }
 
 pub fn split_on_single_char_is_invariant_under_rechunking_test() -> Nil {
   text_relation_over(text_pieces_without_combining_generator(), fn(chunks) {
-    fold.to_list(text.split(over: source.from_list(chunks), on: ","))
+    datastream.to_list(datastream.split(
+      over: datastream.from_list(chunks),
+      on: ",",
+    ))
   })
 }
 
 pub fn split_on_multi_char_is_invariant_under_rechunking_test() -> Nil {
   text_relation_over(text_pieces_without_combining_generator(), fn(chunks) {
-    fold.to_list(text.split(over: source.from_list(chunks), on: ",;"))
+    datastream.to_list(datastream.split(
+      over: datastream.from_list(chunks),
+      on: ",;",
+    ))
   })
 }
 
 pub fn split_into_graphemes_is_invariant_under_rechunking_test() -> Nil {
   text_relation(fn(chunks) {
-    fold.to_list(text.split(over: source.from_list(chunks), on: ""))
+    datastream.to_list(datastream.split(
+      over: datastream.from_list(chunks),
+      on: "",
+    ))
   })
 }
 
 pub fn split_into_graphemes_matches_string_to_graphemes_test() -> Nil {
   metamon.forall(text_pieces_generator(), fn(pieces) {
     let whole = string.concat(pieces)
-    fold.to_list(text.split(over: source.from_list([whole]), on: ""))
+    datastream.to_list(datastream.split(
+      over: datastream.from_list([whole]),
+      on: "",
+    ))
     == string.to_graphemes(whole)
   })
 }
@@ -204,7 +219,10 @@ pub fn split_into_graphemes_matches_string_to_graphemes_test() -> Nil {
 pub fn split_on_delimiter_matches_string_split_test() -> Nil {
   metamon.forall(text_pieces_without_combining_generator(), fn(pieces) {
     let whole = string.concat(pieces)
-    fold.to_list(text.split(over: source.from_list([whole]), on: ","))
+    datastream.to_list(datastream.split(
+      over: datastream.from_list([whole]),
+      on: ",",
+    ))
     == string.split(whole, ",")
   })
 }
@@ -215,14 +233,18 @@ pub fn split_on_delimiter_matches_string_split_test() -> Nil {
 pub fn utf8_decode_is_invariant_under_rechunking_test() -> Nil {
   byte_relation(bytes_generator(), fn(chunks) {
     let #(oks, errors) =
-      fold.partition_result(text.utf8_decode(over: source.from_list(chunks)))
+      datastream.partition_result(
+        datastream.utf8_decode(over: datastream.from_list(chunks)),
+      )
     #(string.concat(oks), list.length(errors))
   })
 }
 
 pub fn utf8_decode_of_valid_text_is_invariant_under_rechunking_test() -> Nil {
   byte_relation(generator.bit_array_utf8(range.constant(0, 16)), fn(chunks) {
-    fold.to_string(text.utf8_decode_lossy(over: source.from_list(chunks)))
+    datastream.to_string(
+      datastream.utf8_decode_lossy(over: datastream.from_list(chunks)),
+    )
   })
 }
 
@@ -232,10 +254,10 @@ pub fn utf8_encode_then_decode_round_trips_test() -> Nil {
     fn(input) {
       let #(pieces, sizes) = input
       let #(_, chunks) = text_chunkings(pieces, sizes)
-      source.from_list(chunks)
-      |> text.utf8_encode
-      |> text.utf8_decode_lossy
-      |> fold.to_string
+      datastream.from_list(chunks)
+      |> datastream.utf8_encode
+      |> datastream.utf8_decode_lossy
+      |> datastream.to_string
       == string.concat(pieces)
     },
   )
@@ -245,44 +267,59 @@ pub fn utf8_encode_then_decode_round_trips_test() -> Nil {
 
 pub fn bytes_is_invariant_under_rechunking_test() -> Nil {
   byte_relation(bytes_generator(), fn(chunks) {
-    fold.to_list(binary.bytes(over: source.from_list(chunks)))
+    datastream.to_list(datastream.bytes(over: datastream.from_list(chunks)))
   })
 }
 
 pub fn delimited_single_byte_is_invariant_under_rechunking_test() -> Nil {
   byte_relation(framed_bytes_generator(), fn(chunks) {
-    fold.to_list(binary.delimited(over: source.from_list(chunks), on: <<10>>))
+    datastream.to_list(
+      datastream.delimited(over: datastream.from_list(chunks), on: <<10>>)
+      |> should.be_ok,
+    )
   })
 }
 
 pub fn delimited_multi_byte_is_invariant_under_rechunking_test() -> Nil {
   byte_relation(framed_bytes_generator(), fn(chunks) {
-    fold.to_list(
-      binary.delimited(over: source.from_list(chunks), on: <<13, 10>>),
+    datastream.to_list(
+      datastream.delimited(over: datastream.from_list(chunks), on: <<13, 10>>)
+      |> should.be_ok,
     )
   })
 }
 
 pub fn fixed_size_is_invariant_under_rechunking_test() -> Nil {
   byte_relation(framed_bytes_generator(), fn(chunks) {
-    fold.to_list(binary.fixed_size(over: source.from_list(chunks), size: 3))
+    datastream.to_list(
+      datastream.fixed_size(over: datastream.from_list(chunks), size: 3)
+      |> should.be_ok,
+    )
   })
 }
 
 pub fn length_prefixed_is_invariant_under_rechunking_test() -> Nil {
   byte_relation(framed_bytes_generator(), fn(chunks) {
-    fold.to_list(binary.length_prefixed(
-      over: source.from_list(chunks),
-      prefix_size: 1,
-    ))
+    datastream.to_list(
+      datastream.length_prefixed(
+        over: datastream.from_list(chunks),
+        prefix_size: 1,
+        max_frame_size: 16_777_216,
+      )
+      |> should.be_ok,
+    )
   })
 }
 
 pub fn length_prefixed_two_byte_prefix_is_invariant_under_rechunking_test() -> Nil {
   byte_relation(framed_bytes_generator(), fn(chunks) {
-    fold.to_list(binary.length_prefixed(
-      over: source.from_list(chunks),
-      prefix_size: 2,
-    ))
+    datastream.to_list(
+      datastream.length_prefixed(
+        over: datastream.from_list(chunks),
+        prefix_size: 2,
+        max_frame_size: 16_777_216,
+      )
+      |> should.be_ok,
+    )
   })
 }

@@ -10,18 +10,6 @@ import datastream/erlang/internal/event_log
 import datastream/erlang/internal/watchdog
 
 @target(erlang)
-import datastream/erlang/par
-
-@target(erlang)
-import datastream/fold
-
-@target(erlang)
-import datastream/source
-
-@target(erlang)
-import datastream/stream
-
-@target(erlang)
 import gleam/erlang/process
 
 @target(erlang)
@@ -41,17 +29,27 @@ pub const beam_only_marker: String = "datastream/erlang/par_test is BEAM-only"
 
 @target(erlang)
 pub fn map_ordered_preserves_input_order_test() {
-  source.from_list([1, 2, 3, 4])
-  |> par.map_ordered_with(with: fn(x) { x * 2 }, max_workers: 2, max_buffer: 4)
-  |> fold.to_list
+  datastream.from_list([1, 2, 3, 4])
+  |> datastream.map_ordered(
+    with: fn(x) { x * 2 },
+    max_workers: 2,
+    max_buffer: 4,
+  )
+  |> should.be_ok
+  |> datastream.to_list
   |> should.equal([2, 4, 6, 8])
 }
 
 @target(erlang)
 pub fn map_ordered_on_empty_yields_empty_test() {
-  source.from_list([])
-  |> par.map_ordered_with(with: fn(x) { x * 2 }, max_workers: 2, max_buffer: 4)
-  |> fold.to_list
+  datastream.from_list([])
+  |> datastream.map_ordered(
+    with: fn(x) { x * 2 },
+    max_workers: 2,
+    max_buffer: 4,
+  )
+  |> should.be_ok
+  |> datastream.to_list
   |> should.equal([])
 }
 
@@ -59,13 +57,14 @@ pub fn map_ordered_on_empty_yields_empty_test() {
 
 @target(erlang)
 pub fn map_unordered_yields_set_equal_to_inputs_test() {
-  source.from_list([1, 2, 3, 4])
-  |> par.map_unordered_with(
+  datastream.from_list([1, 2, 3, 4])
+  |> datastream.map_unordered(
     with: fn(x) { x * 2 },
     max_workers: 2,
     max_buffer: 4,
   )
-  |> fold.to_list
+  |> should.be_ok
+  |> datastream.to_list
   |> list.sort(by: int_compare)
   |> should.equal([2, 4, 6, 8])
 }
@@ -82,16 +81,23 @@ fn int_compare(a: Int, b: Int) -> order.Order {
 // --- each_* --------------------------------------------------------------
 
 @target(erlang)
-pub fn each_ordered_returns_nil_test() {
-  source.from_list([1, 2, 3])
-  |> par.each_ordered_with(with: fn(_) { Nil }, max_workers: 2, max_buffer: 4)
+pub fn ordered_map_then_each_returns_nil_test() {
+  datastream.from_list([1, 2, 3])
+  |> datastream.map_ordered(with: fn(x) { x }, max_workers: 2, max_buffer: 4)
+  |> should.be_ok
+  |> datastream.each(with: fn(_) { Nil })
   |> should.equal(Nil)
 }
 
 @target(erlang)
 pub fn each_unordered_returns_nil_test() {
-  source.from_list([1, 2, 3])
-  |> par.each_unordered_with(with: fn(_) { Nil }, max_workers: 2, max_buffer: 4)
+  datastream.from_list([1, 2, 3])
+  |> datastream.each_unordered(
+    with: fn(_) { Nil },
+    max_workers: 2,
+    max_buffer: 4,
+  )
+  |> should.be_ok
   |> should.equal(Nil)
 }
 
@@ -99,19 +105,21 @@ pub fn each_unordered_returns_nil_test() {
 
 @target(erlang)
 pub fn merge_interleaves_two_sources_test() {
-  par.merge_with(
-    streams: [source.from_list([1, 2]), source.from_list([3, 4])],
+  datastream.merge(
+    streams: [datastream.from_list([1, 2]), datastream.from_list([3, 4])],
     max_buffer: 4,
   )
-  |> fold.to_list
+  |> should.be_ok
+  |> datastream.to_list
   |> list.sort(by: int_compare)
   |> should.equal([1, 2, 3, 4])
 }
 
 @target(erlang)
 pub fn merge_empty_list_yields_empty_stream_test() {
-  par.merge_with(streams: [], max_buffer: 4)
-  |> fold.to_list
+  datastream.merge(streams: [], max_buffer: 4)
+  |> should.be_ok
+  |> datastream.to_list
   |> should.equal([])
 }
 
@@ -119,43 +127,51 @@ pub fn merge_empty_list_yields_empty_stream_test() {
 
 @target(erlang)
 pub fn race_empty_list_yields_empty_test() {
-  par.race(streams: [])
-  |> fold.to_list
+  datastream.race(streams: [])
+  |> datastream.to_list
   |> should.equal([])
 }
 
 @target(erlang)
 pub fn race_single_source_passes_through_test() {
-  par.race(streams: [source.from_list([1, 2, 3])])
-  |> fold.to_list
+  datastream.race(streams: [datastream.from_list([1, 2, 3])])
+  |> datastream.to_list
   |> should.equal([1, 2, 3])
 }
 
 @target(erlang)
 pub fn race_all_empty_contenders_yields_empty_test() {
-  par.race(streams: [source.empty(), source.empty()])
-  |> fold.to_list
+  datastream.race(streams: [datastream.empty(), datastream.empty()])
+  |> datastream.to_list
   |> should.equal([])
 }
 
 @target(erlang)
 pub fn race_one_empty_and_one_emitting_yields_emitting_test() {
-  par.race(streams: [source.empty(), source.from_list([1, 2, 3])])
-  |> fold.to_list
+  datastream.race(streams: [datastream.empty(), datastream.from_list([1, 2, 3])])
+  |> datastream.to_list
   |> should.equal([1, 2, 3])
 }
 
 @target(erlang)
 pub fn race_multiple_empties_and_one_emitting_yields_emitting_test() {
-  par.race(streams: [source.empty(), source.empty(), source.from_list([42])])
-  |> fold.to_list
+  datastream.race(streams: [
+    datastream.empty(),
+    datastream.empty(),
+    datastream.from_list([42]),
+  ])
+  |> datastream.to_list
   |> should.equal([42])
 }
 
 @target(erlang)
 pub fn race_emitting_first_and_empties_later_yields_emitting_test() {
-  par.race(streams: [source.from_list([7, 8]), source.empty(), source.empty()])
-  |> fold.to_list
+  datastream.race(streams: [
+    datastream.from_list([7, 8]),
+    datastream.empty(),
+    datastream.empty(),
+  ])
+  |> datastream.to_list
   |> should.equal([7, 8])
 }
 
@@ -164,12 +180,12 @@ pub fn race_take_one_from_two_emitting_sources_yields_one_element_test() {
   // Both sources can emit. Downstream `take(1)` must terminate the
   // pipeline after exactly one element regardless of which source
   // won the race.
-  par.race(streams: [
-    source.from_list([1, 2, 3]),
-    source.from_list([10, 20, 30]),
+  datastream.race(streams: [
+    datastream.from_list([1, 2, 3]),
+    datastream.from_list([10, 20, 30]),
   ])
-  |> stream.take(up_to: 1)
-  |> fold.count
+  |> datastream.take(up_to: 1)
+  |> datastream.count
   |> should.equal(1)
 }
 
@@ -179,12 +195,12 @@ pub fn race_three_emitting_sources_yields_one_winners_cardinality_test() {
   // winner's full tail comes through. Because the winner is
   // non-deterministic, the stable assertion is cardinality: the
   // output length equals the losing choice's emit count (2).
-  par.race(streams: [
-    source.from_list([10, 20]),
-    source.from_list([30, 40]),
-    source.from_list([50, 60]),
+  datastream.race(streams: [
+    datastream.from_list([10, 20]),
+    datastream.from_list([30, 40]),
+    datastream.from_list([50, 60]),
   ])
-  |> fold.count
+  |> datastream.count
   |> should.equal(2)
 }
 
@@ -197,9 +213,10 @@ pub fn merge_take_early_exit_closes_upstreams_test() {
   let b = event_log.counted_resource([4, 5, 6], named: "b", log: log)
 
   let _result =
-    par.merge_with(streams: [a, b], max_buffer: 4)
-    |> stream.take(up_to: 1)
-    |> fold.to_list
+    datastream.merge(streams: [a, b], max_buffer: 4)
+    |> should.be_ok
+    |> datastream.take(up_to: 1)
+    |> datastream.to_list
 
   process.sleep(100)
   let events = event_log.drain(log, within: 100)
@@ -214,9 +231,14 @@ pub fn map_unordered_take_early_exit_closes_upstream_test() {
 
   let _result =
     upstream
-    |> par.map_unordered_with(with: fn(x) { x }, max_workers: 2, max_buffer: 4)
-    |> stream.take(up_to: 1)
-    |> fold.to_list
+    |> datastream.map_unordered(
+      with: fn(x) { x },
+      max_workers: 2,
+      max_buffer: 4,
+    )
+    |> should.be_ok
+    |> datastream.take(up_to: 1)
+    |> datastream.to_list
 
   process.sleep(50)
   let events = event_log.drain(log, within: 50)
@@ -231,9 +253,10 @@ pub fn map_ordered_take_early_exit_closes_upstream_test() {
 
   let _result =
     upstream
-    |> par.map_ordered_with(with: fn(x) { x }, max_workers: 2, max_buffer: 4)
-    |> stream.take(up_to: 1)
-    |> fold.to_list
+    |> datastream.map_ordered(with: fn(x) { x }, max_workers: 2, max_buffer: 4)
+    |> should.be_ok
+    |> datastream.take(up_to: 1)
+    |> datastream.to_list
 
   process.sleep(50)
   let events = event_log.drain(log, within: 50)
@@ -245,11 +268,11 @@ pub fn map_ordered_take_early_exit_closes_upstream_test() {
 pub fn race_winner_take_full_consumption_closes_winner_test() {
   let log = event_log.new_log()
   let winner = event_log.counted_resource([1], named: "w", log: log)
-  let loser = source.from_list([2])
+  let loser = datastream.from_list([2])
 
   let _result =
-    par.race(streams: [winner, loser])
-    |> fold.to_list
+    datastream.race(streams: [winner, loser])
+    |> datastream.to_list
 
   process.sleep(50)
   let events = event_log.drain(log, within: 50)
@@ -264,39 +287,60 @@ pub fn race_winner_take_full_consumption_closes_winner_test() {
 
 @target(erlang)
 pub fn map_unordered_default_runs_test() {
-  source.from_list([1, 2, 3, 4])
-  |> par.map_unordered(with: fn(x) { x * 10 })
-  |> fold.to_list
+  datastream.from_list([1, 2, 3, 4])
+  |> datastream.map_unordered(
+    with: fn(x) { x * 10 },
+    max_workers: 4,
+    max_buffer: 16,
+  )
+  |> should.be_ok
+  |> datastream.to_list
   |> list.sort(by: int_compare)
   |> should.equal([10, 20, 30, 40])
 }
 
 @target(erlang)
 pub fn map_ordered_default_runs_test() {
-  source.from_list([1, 2, 3, 4])
-  |> par.map_ordered(with: fn(x) { x * 10 })
-  |> fold.to_list
+  datastream.from_list([1, 2, 3, 4])
+  |> datastream.map_ordered(
+    with: fn(x) { x * 10 },
+    max_workers: 4,
+    max_buffer: 16,
+  )
+  |> should.be_ok
+  |> datastream.to_list
   |> should.equal([10, 20, 30, 40])
 }
 
 @target(erlang)
 pub fn each_unordered_default_returns_nil_test() {
-  source.from_list([1, 2, 3])
-  |> par.each_unordered(with: fn(_) { Nil })
+  datastream.from_list([1, 2, 3])
+  |> datastream.each_unordered(
+    with: fn(_) { Nil },
+    max_workers: 4,
+    max_buffer: 16,
+  )
+  |> should.be_ok
   |> should.equal(Nil)
 }
 
 @target(erlang)
-pub fn each_ordered_default_returns_nil_test() {
-  source.from_list([1, 2, 3])
-  |> par.each_ordered(with: fn(_) { Nil })
+pub fn ordered_map_then_each_with_default_limits_test() {
+  datastream.from_list([1, 2, 3])
+  |> datastream.map_ordered(with: fn(x) { x }, max_workers: 4, max_buffer: 16)
+  |> should.be_ok
+  |> datastream.each(with: fn(_) { Nil })
   |> should.equal(Nil)
 }
 
 @target(erlang)
 pub fn merge_default_runs_test() {
-  par.merge(streams: [source.from_list([1, 2]), source.from_list([3, 4])])
-  |> fold.to_list
+  datastream.merge(
+    streams: [datastream.from_list([1, 2]), datastream.from_list([3, 4])],
+    max_buffer: 16,
+  )
+  |> should.be_ok
+  |> datastream.to_list
   |> list.sort(by: int_compare)
   |> should.equal([1, 2, 3, 4])
 }
@@ -308,20 +352,22 @@ pub fn map_unordered_with_handles_infinite_upstream_test() {
   // Without back-pressure the worker pool would spin forever pulling
   // from the infinite source. With max_workers / max_buffer set, take
   // halts the pipeline cleanly after 10 elements.
-  source.unfold(from: 1, with: fn(n) { datastream.Next(n, n + 1) })
-  |> par.map_unordered_with(with: fn(x) { x }, max_workers: 2, max_buffer: 4)
-  |> stream.take(up_to: 10)
-  |> fold.to_list
+  datastream.unfold(from: 1, with: fn(n) { datastream.Next(n, n + 1) })
+  |> datastream.map_unordered(with: fn(x) { x }, max_workers: 2, max_buffer: 4)
+  |> should.be_ok
+  |> datastream.take(up_to: 10)
+  |> datastream.to_list
   |> list.length
   |> should.equal(10)
 }
 
 @target(erlang)
 pub fn map_ordered_with_handles_infinite_upstream_test() {
-  source.unfold(from: 1, with: fn(n) { datastream.Next(n, n + 1) })
-  |> par.map_ordered_with(with: fn(x) { x }, max_workers: 2, max_buffer: 4)
-  |> stream.take(up_to: 10)
-  |> fold.to_list
+  datastream.unfold(from: 1, with: fn(n) { datastream.Next(n, n + 1) })
+  |> datastream.map_ordered(with: fn(x) { x }, max_workers: 2, max_buffer: 4)
+  |> should.be_ok
+  |> datastream.take(up_to: 10)
+  |> datastream.to_list
   |> should.equal([1, 2, 3, 4, 5, 6, 7, 8, 9, 10])
 }
 
@@ -329,8 +375,8 @@ pub fn map_ordered_with_handles_infinite_upstream_test() {
 pub fn merge_with_n_streams_greater_than_max_buffer_test() {
   // 5 streams, max_buffer = 2: only 2 workers can be in-flight at any
   // moment. All 15 elements must still be emitted.
-  let make_stream = fn() { source.from_list([1, 2, 3]) }
-  par.merge_with(
+  let make_stream = fn() { datastream.from_list([1, 2, 3]) }
+  datastream.merge(
     streams: [
       make_stream(),
       make_stream(),
@@ -340,7 +386,8 @@ pub fn merge_with_n_streams_greater_than_max_buffer_test() {
     ],
     max_buffer: 2,
   )
-  |> fold.to_list
+  |> should.be_ok
+  |> datastream.to_list
   |> list.length
   |> should.equal(15)
 }
@@ -348,10 +395,11 @@ pub fn merge_with_n_streams_greater_than_max_buffer_test() {
 @target(erlang)
 pub fn merge_with_handles_infinite_streams_test() {
   let infinite =
-    source.unfold(from: 1, with: fn(n) { datastream.Next(n, n + 1) })
-  par.merge_with(streams: [infinite], max_buffer: 2)
-  |> stream.take(up_to: 5)
-  |> fold.to_list
+    datastream.unfold(from: 1, with: fn(n) { datastream.Next(n, n + 1) })
+  datastream.merge(streams: [infinite], max_buffer: 2)
+  |> should.be_ok
+  |> datastream.take(up_to: 5)
+  |> datastream.to_list
   |> list.length
   |> should.equal(5)
 }
@@ -362,8 +410,8 @@ pub fn map_unordered_with_bounds_in_flight_test() {
   // The peak observed concurrent in-flight count must not exceed
   // max_workers (which equals in_flight bound for map_unordered).
   let log = event_log.new_log()
-  source.unfold(from: 1, with: fn(n) { datastream.Next(n, n + 1) })
-  |> par.map_unordered_with(
+  datastream.unfold(from: 1, with: fn(n) { datastream.Next(n, n + 1) })
+  |> datastream.map_unordered(
     with: fn(x) {
       event_log.record_enter(log, named: "f")
       process.sleep(20)
@@ -373,8 +421,9 @@ pub fn map_unordered_with_bounds_in_flight_test() {
     max_workers: 3,
     max_buffer: 8,
   )
-  |> stream.take(up_to: 15)
-  |> fold.to_list
+  |> should.be_ok
+  |> datastream.take(up_to: 15)
+  |> datastream.to_list
   |> list.length
   |> should.equal(15)
 
@@ -387,8 +436,8 @@ pub fn map_unordered_with_bounds_in_flight_test() {
 @target(erlang)
 pub fn map_ordered_with_bounds_in_flight_test() {
   let log = event_log.new_log()
-  source.unfold(from: 1, with: fn(n) { datastream.Next(n, n + 1) })
-  |> par.map_ordered_with(
+  datastream.unfold(from: 1, with: fn(n) { datastream.Next(n, n + 1) })
+  |> datastream.map_ordered(
     with: fn(x) {
       event_log.record_enter(log, named: "f")
       process.sleep(20)
@@ -398,8 +447,9 @@ pub fn map_ordered_with_bounds_in_flight_test() {
     max_workers: 4,
     max_buffer: 4,
   )
-  |> stream.take(up_to: 20)
-  |> fold.to_list
+  |> should.be_ok
+  |> datastream.take(up_to: 20)
+  |> datastream.to_list
   |> list.length
   |> should.equal(20)
 
@@ -415,15 +465,15 @@ pub fn merge_with_bounds_in_flight_test() {
   // workers actively pulling (i.e. inside f) at any one time.
   let log = event_log.new_log()
   let make_stream = fn() {
-    source.unfold(from: 1, with: fn(n) { datastream.Next(n, n + 1) })
-    |> stream.map(with: fn(x) {
+    datastream.unfold(from: 1, with: fn(n) { datastream.Next(n, n + 1) })
+    |> datastream.map(with: fn(x) {
       event_log.record_enter(log, named: "pump")
       process.sleep(10)
       event_log.record_leave(log, named: "pump")
       x
     })
   }
-  par.merge_with(
+  datastream.merge(
     streams: [
       make_stream(),
       make_stream(),
@@ -433,8 +483,9 @@ pub fn merge_with_bounds_in_flight_test() {
     ],
     max_buffer: 2,
   )
-  |> stream.take(up_to: 20)
-  |> fold.to_list
+  |> should.be_ok
+  |> datastream.take(up_to: 20)
+  |> datastream.to_list
   |> list.length
   |> should.equal(20)
 
@@ -452,8 +503,8 @@ pub fn merge_with_slow_consumer_does_not_overproduce_test() {
   // the peak in-flight count.
   let log = event_log.new_log()
   let make_stream = fn() {
-    source.unfold(from: 1, with: fn(n) { datastream.Next(n, n + 1) })
-    |> stream.map(with: fn(x) {
+    datastream.unfold(from: 1, with: fn(n) { datastream.Next(n, n + 1) })
+    |> datastream.map(with: fn(x) {
       event_log.record_enter(log, named: "pump")
       process.sleep(5)
       event_log.record_leave(log, named: "pump")
@@ -461,7 +512,7 @@ pub fn merge_with_slow_consumer_does_not_overproduce_test() {
     })
   }
   let result =
-    par.merge_with(
+    datastream.merge(
       streams: [
         make_stream(),
         make_stream(),
@@ -471,10 +522,11 @@ pub fn merge_with_slow_consumer_does_not_overproduce_test() {
       ],
       max_buffer: 2,
     )
+    |> should.be_ok
     // Slow consumer: 15 ms between successive downstream pulls.
-    |> stream.tap(with: fn(_) { process.sleep(15) })
-    |> stream.take(up_to: 15)
-    |> fold.to_list
+    |> datastream.tap(with: fn(_) { process.sleep(15) })
+    |> datastream.take(up_to: 15)
+    |> datastream.to_list
   list.length(result) |> should.equal(15)
 
   process.sleep(150)
@@ -483,114 +535,50 @@ pub fn merge_with_slow_consumer_does_not_overproduce_test() {
   { peak <= 2 } |> should.be_true
 }
 
-// --- construction-time panics --------------------------------------------
-//
-// `validate_par_args` and `validate_buffer` panic on construction
-// when concurrency knobs are out of range. Catching a Gleam `panic`
-// directly is awkward, but spawning the failing call in an unlinked
-// process and observing that no completion message arrives within a
-// short timeout is sufficient: a panicking process never sends, while
-// a non-panicking call here completes in microseconds.
-
-@target(erlang)
-fn panicked(thunk: fn() -> Nil) -> Bool {
-  let done = process.new_subject()
-  let _pid =
-    process.spawn_unlinked(fn() {
-      thunk()
-      process.send(done, Nil)
-    })
-  case process.receive(from: done, within: 100) {
-    Ok(_) -> False
-    Error(_) -> True
-  }
-}
-
-@target(erlang)
-pub fn map_unordered_with_panics_on_zero_max_workers_test() {
-  let did_panic =
-    panicked(fn() {
-      let _result =
-        par.map_unordered_with(
-          source.from_list([1]),
-          with: fn(x) { x },
-          max_workers: 0,
-          max_buffer: 4,
-        )
-      Nil
-    })
-  did_panic |> should.be_true
-}
-
-@target(erlang)
-pub fn map_ordered_with_panics_on_max_buffer_below_max_workers_test() {
-  let did_panic =
-    panicked(fn() {
-      let _result =
-        par.map_ordered_with(
-          source.from_list([1]),
-          with: fn(x) { x },
-          max_workers: 4,
-          max_buffer: 2,
-        )
-      Nil
-    })
-  did_panic |> should.be_true
-}
-
-@target(erlang)
-pub fn merge_with_panics_on_zero_max_buffer_test() {
-  let did_panic =
-    panicked(fn() {
-      let _result =
-        par.merge_with(streams: [source.from_list([1])], max_buffer: 0)
-      Nil
-    })
-  did_panic |> should.be_true
-}
-
 // --- checked variants (#189) -------------------------------------------
 
 @target(erlang)
 pub fn map_unordered_with_checked_ok_matches_unchecked_test() {
   let assert Ok(s) =
-    par.map_unordered_with_checked(
-      source.from_list([1, 2, 3]),
+    datastream.map_unordered(
+      datastream.from_list([1, 2, 3]),
       with: fn(x) { x * 2 },
       max_workers: 2,
       max_buffer: 4,
     )
-  let result = s |> fold.to_list
+  let result = s |> datastream.to_list
   list.sort(result, by: int_compare) |> should.equal([2, 4, 6])
 }
 
 @target(erlang)
 pub fn map_unordered_with_checked_rejects_zero_max_workers_test() {
-  let assert Error(par.InvalidMaxWorkers(function: name, given: g)) =
-    par.map_unordered_with_checked(
-      source.from_list([1]),
+  let assert Error(datastream.NotPositive(
+    argument: "max_workers",
+    function: name,
+    given: g,
+  )) =
+    datastream.map_unordered(
+      datastream.from_list([1]),
       with: fn(x) { x },
       max_workers: 0,
       max_buffer: 4,
     )
-  name |> should.equal("map_unordered_with")
+  name |> should.equal("map_unordered")
   g |> should.equal(0)
 }
 
 @target(erlang)
 pub fn map_unordered_with_checked_rejects_buffer_below_workers_test() {
-  let assert Error(par.BufferLessThanWorkers(
-    function: name,
+  let assert Error(datastream.BufferLessThanWorkers(
     max_workers: w,
     max_buffer: b,
   )) =
-    par.map_unordered_with_checked(
-      source.from_list([1]),
+    datastream.map_unordered(
+      datastream.from_list([1]),
       with: fn(x) { x },
       max_workers: 4,
       max_buffer: 2,
     )
-  name |> should.equal("map_unordered_with")
   w |> should.equal(4)
   b |> should.equal(2)
 }
@@ -598,37 +586,40 @@ pub fn map_unordered_with_checked_rejects_buffer_below_workers_test() {
 @target(erlang)
 pub fn map_ordered_with_checked_ok_matches_unchecked_test() {
   let assert Ok(s) =
-    par.map_ordered_with_checked(
-      source.from_list([1, 2, 3]),
+    datastream.map_ordered(
+      datastream.from_list([1, 2, 3]),
       with: fn(x) { x * 10 },
       max_workers: 2,
       max_buffer: 4,
     )
-  s |> fold.to_list |> should.equal([10, 20, 30])
+  s |> datastream.to_list |> should.equal([10, 20, 30])
 }
 
 @target(erlang)
 pub fn map_ordered_with_checked_rejects_negative_max_workers_test() {
-  let assert Error(par.InvalidMaxWorkers(function: name, given: g)) =
-    par.map_ordered_with_checked(
-      source.from_list([1]),
+  let assert Error(datastream.NotPositive(
+    argument: "max_workers",
+    function: name,
+    given: g,
+  )) =
+    datastream.map_ordered(
+      datastream.from_list([1]),
       with: fn(x) { x },
       max_workers: -1,
       max_buffer: 4,
     )
-  name |> should.equal("map_ordered_with")
+  name |> should.equal("map_ordered")
   g |> should.equal(-1)
 }
 
 @target(erlang)
 pub fn map_ordered_with_checked_rejects_buffer_below_workers_test() {
-  let assert Error(par.BufferLessThanWorkers(
-    function: _,
+  let assert Error(datastream.BufferLessThanWorkers(
     max_workers: w,
     max_buffer: b,
   )) =
-    par.map_ordered_with_checked(
-      source.from_list([1]),
+    datastream.map_ordered(
+      datastream.from_list([1]),
       with: fn(x) { x },
       max_workers: 4,
       max_buffer: 1,
@@ -640,19 +631,22 @@ pub fn map_ordered_with_checked_rejects_buffer_below_workers_test() {
 @target(erlang)
 pub fn merge_with_checked_ok_matches_unchecked_test() {
   let assert Ok(s) =
-    par.merge_with_checked(
-      streams: [source.from_list([1, 2]), source.from_list([3, 4])],
+    datastream.merge(
+      streams: [datastream.from_list([1, 2]), datastream.from_list([3, 4])],
       max_buffer: 4,
     )
-  let result = s |> fold.to_list
+  let result = s |> datastream.to_list
   list.sort(result, by: int_compare) |> should.equal([1, 2, 3, 4])
 }
 
 @target(erlang)
 pub fn merge_with_checked_rejects_zero_max_buffer_test() {
-  let assert Error(par.InvalidMaxBuffer(function: name, given: g)) =
-    par.merge_with_checked(streams: [source.from_list([1])], max_buffer: 0)
-  name |> should.equal("merge_with")
+  let assert Error(datastream.NotPositive(
+    argument: "max_buffer",
+    function: name,
+    given: g,
+  )) = datastream.merge(streams: [datastream.from_list([1])], max_buffer: 0)
+  name |> should.equal("merge")
   g |> should.equal(0)
 }
 
@@ -660,8 +654,8 @@ pub fn merge_with_checked_rejects_zero_max_buffer_test() {
 pub fn each_unordered_with_checked_ok_runs_effect_test() {
   let collector = process.new_subject()
   let assert Ok(Nil) =
-    par.each_unordered_with_checked(
-      over: source.from_list([1, 2, 3]),
+    datastream.each_unordered(
+      over: datastream.from_list([1, 2, 3]),
       with: fn(x) { process.send(collector, x) },
       max_workers: 2,
       max_buffer: 4,
@@ -672,47 +666,47 @@ pub fn each_unordered_with_checked_ok_runs_effect_test() {
 
 @target(erlang)
 pub fn each_unordered_with_checked_rejects_zero_max_workers_test() {
-  let assert Error(par.InvalidMaxWorkers(function: name, given: g)) =
-    par.each_unordered_with_checked(
-      over: source.from_list([1]),
+  let assert Error(datastream.NotPositive(
+    argument: "max_workers",
+    function: name,
+    given: g,
+  )) =
+    datastream.each_unordered(
+      over: datastream.from_list([1]),
       with: fn(_) { Nil },
       max_workers: 0,
       max_buffer: 4,
     )
-  name |> should.equal("each_unordered_with")
+  name |> should.equal("each_unordered")
   g |> should.equal(0)
 }
 
 @target(erlang)
-pub fn each_ordered_with_checked_ok_runs_effect_in_order_test() {
+pub fn ordered_map_then_each_runs_effect_in_order_test() {
   let collector = process.new_subject()
-  let assert Ok(Nil) =
-    par.each_ordered_with_checked(
-      over: source.from_list([1, 2, 3]),
-      with: fn(x) { process.send(collector, x) },
+  let assert Ok(values) =
+    datastream.map_ordered(
+      datastream.from_list([1, 2, 3]),
       max_workers: 2,
       max_buffer: 4,
+      with: fn(x) { x },
     )
-  let received = collect_three(collector, [])
-  // each_ordered_with preserves input order, so reversal of accumulator
-  // gives [1, 2, 3].
-  list.reverse(received) |> should.equal([1, 2, 3])
+  datastream.each(values, with: fn(x) { process.send(collector, x) })
+  assert collect_three(collector, []) |> list.reverse == [1, 2, 3]
 }
 
 @target(erlang)
 pub fn each_ordered_with_checked_rejects_buffer_below_workers_test() {
-  let assert Error(par.BufferLessThanWorkers(
-    function: name,
+  let assert Error(datastream.BufferLessThanWorkers(
     max_workers: w,
     max_buffer: b,
   )) =
-    par.each_ordered_with_checked(
-      over: source.from_list([1]),
+    datastream.each_unordered(
+      over: datastream.from_list([1]),
       with: fn(_) { Nil },
       max_workers: 3,
       max_buffer: 1,
     )
-  name |> should.equal("each_ordered_with")
   w |> should.equal(3)
   b |> should.equal(1)
 }
@@ -722,53 +716,57 @@ pub fn each_ordered_with_checked_rejects_buffer_below_workers_test() {
 @target(erlang)
 pub fn map_ordered_with_checked_accepts_one_worker_and_equal_buffer_test() {
   let assert Ok(s) =
-    par.map_ordered_with_checked(
-      over: source.from_list([1, 2, 3]),
+    datastream.map_ordered(
+      over: datastream.from_list([1, 2, 3]),
       with: fn(x) { x * 10 },
       max_workers: 1,
       max_buffer: 1,
     )
-  fold.to_list(s) |> should.equal([10, 20, 30])
+  datastream.to_list(s) |> should.equal([10, 20, 30])
 }
 
 @target(erlang)
 pub fn map_unordered_with_checked_accepts_buffer_equal_to_workers_test() {
   let assert Ok(s) =
-    par.map_unordered_with_checked(
-      over: source.from_list([1, 2, 3]),
+    datastream.map_unordered(
+      over: datastream.from_list([1, 2, 3]),
       with: fn(x) { x * 10 },
       max_workers: 2,
       max_buffer: 2,
     )
-  fold.to_list(s) |> list.sort(by: int_compare) |> should.equal([10, 20, 30])
+  datastream.to_list(s)
+  |> list.sort(by: int_compare)
+  |> should.equal([10, 20, 30])
 }
 
 @target(erlang)
 pub fn map_ordered_with_accepts_one_worker_and_equal_buffer_test() {
-  par.map_ordered_with(
-    over: source.from_list([1, 2]),
+  datastream.map_ordered(
+    over: datastream.from_list([1, 2]),
     with: fn(x) { x + 1 },
     max_workers: 1,
     max_buffer: 1,
   )
-  |> fold.to_list
+  |> should.be_ok
+  |> datastream.to_list
   |> should.equal([2, 3])
 }
 
 @target(erlang)
 pub fn merge_with_checked_accepts_a_buffer_of_one_test() {
   let assert Ok(s) =
-    par.merge_with_checked(
-      streams: [source.from_list([1]), source.from_list([2])],
+    datastream.merge(
+      streams: [datastream.from_list([1]), datastream.from_list([2])],
       max_buffer: 1,
     )
-  fold.to_list(s) |> list.sort(by: int_compare) |> should.equal([1, 2])
+  datastream.to_list(s) |> list.sort(by: int_compare) |> should.equal([1, 2])
 }
 
 @target(erlang)
 pub fn merge_with_accepts_a_buffer_of_one_test() {
-  par.merge_with(streams: [source.from_list([1, 2])], max_buffer: 1)
-  |> fold.to_list
+  datastream.merge(streams: [datastream.from_list([1, 2])], max_buffer: 1)
+  |> should.be_ok
+  |> datastream.to_list
   |> should.equal([1, 2])
 }
 
@@ -788,18 +786,19 @@ fn collect_three(subj: process.Subject(Int), acc: List(Int)) -> List(Int) {
 //
 // Worker crashes are detected via process monitors. The coordinator
 // closes the upstream, stops the other workers and re-raises the crash
-// in the process pulling the stream, like `stream.map` would.
+// in the process pulling the stream, like `datastream.map` would.
 
 @target(erlang)
 pub fn map_unordered_with_propagates_a_panic_in_f_test() {
   watchdog.run(within: 2000, running: fn() {
-    source.from_list([1, 2, 3])
-    |> par.map_unordered_with(
+    datastream.from_list([1, 2, 3])
+    |> datastream.map_unordered(
       with: fn(_x) { panic as "boom" },
       max_workers: 2,
       max_buffer: 4,
     )
-    |> fold.to_list
+    |> should.be_ok
+    |> datastream.to_list
   })
   |> should.equal(watchdog.Crashed)
 }
@@ -807,13 +806,14 @@ pub fn map_unordered_with_propagates_a_panic_in_f_test() {
 @target(erlang)
 pub fn map_ordered_with_propagates_a_panic_in_f_test() {
   watchdog.run(within: 2000, running: fn() {
-    source.from_list([1, 2, 3])
-    |> par.map_ordered_with(
+    datastream.from_list([1, 2, 3])
+    |> datastream.map_ordered(
       with: fn(_x) { panic as "boom" },
       max_workers: 2,
       max_buffer: 4,
     )
-    |> fold.to_list
+    |> should.be_ok
+    |> datastream.to_list
   })
   |> should.equal(watchdog.Crashed)
 }

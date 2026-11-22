@@ -13,11 +13,8 @@
 //// guard keeps the file out of the JavaScript build.
 
 @target(erlang)
-import datastream/erlang/par
-@target(erlang)
-import datastream/fold
-@target(erlang)
-import datastream/source
+import datastream
+
 @target(erlang)
 import gleam/list
 @target(erlang)
@@ -42,13 +39,14 @@ pub const beam_only_marker: String =
 /// fit when the downstream is order-independent (aggregation, sink
 /// writes, fan-out to a queue).
 pub fn run(inputs: List(Int)) -> Int {
-  source.from_list(inputs)
-  |> par.map_unordered_with(
+  datastream.from_list(inputs)
+  |> datastream.map_unordered(
     with: fn(x) { x * x },
     max_workers: 4,
     max_buffer: 8,
   )
-  |> fold.sum_int
+  |> should.be_ok
+  |> datastream.sum_int
 }
 
 @target(erlang)
@@ -62,13 +60,14 @@ pub fn parallel_pipeline_example_sum_test() {
 pub fn parallel_pipeline_example_set_equality_test() {
   // The element identities (independent of order) are stable across
   // runs. `list.sort` re-orders the unordered output for comparison.
-  source.from_list([1, 2, 3, 4])
-  |> par.map_unordered_with(
+  datastream.from_list([1, 2, 3, 4])
+  |> datastream.map_unordered(
     with: fn(x) { x * 10 },
     max_workers: 2,
     max_buffer: 4,
   )
-  |> fold.to_list
+  |> should.be_ok
+  |> datastream.to_list
   |> list.sort(by: int_compare)
   |> should.equal([10, 20, 30, 40])
 }

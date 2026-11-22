@@ -1,6 +1,4 @@
 import datastream.{Done, Next}
-import datastream/fold
-import gleam/option.{None, Some}
 import gleam/string_tree
 import gleeunit
 import gleeunit/should
@@ -23,24 +21,26 @@ fn repeat(value) {
 }
 
 pub fn to_list_returns_elements_in_source_order_test() {
-  from_list([1, 2, 3]) |> fold.to_list |> should.equal([1, 2, 3])
+  from_list([1, 2, 3]) |> datastream.to_list |> should.equal([1, 2, 3])
 }
 
 pub fn to_list_on_empty_returns_empty_test() {
-  from_list([]) |> fold.to_list |> should.equal([])
+  from_list([]) |> datastream.to_list |> should.equal([])
 }
 
 pub fn to_string_concatenates_chunks_in_source_order_test() {
-  from_list(["a", "bc", "def"]) |> fold.to_string |> should.equal("abcdef")
+  from_list(["a", "bc", "def"])
+  |> datastream.to_string
+  |> should.equal("abcdef")
 }
 
 pub fn to_string_on_empty_returns_empty_string_test() {
-  from_list([]) |> fold.to_string |> should.equal("")
+  from_list([]) |> datastream.to_string |> should.equal("")
 }
 
 pub fn to_string_preserves_unicode_test() {
   from_list(["こん", "にち", "は"])
-  |> fold.to_string
+  |> datastream.to_string
   |> should.equal("こんにちは")
 }
 
@@ -48,62 +48,62 @@ pub fn to_string_drives_stream_to_completion_test() {
   // Confirms `to_string` is a full-traversal reducer (not short-circuiting):
   // every chunk must end up in the result.
   from_list(["1", "2", "3", "4", "5"])
-  |> fold.to_string
+  |> datastream.to_string
   |> should.equal("12345")
 }
 
 pub fn to_string_tree_preserves_source_order_test() {
   from_list(["a", "b", "c"])
-  |> fold.to_string_tree
+  |> datastream.to_string_tree
   |> string_tree.to_string
   |> should.equal("abc")
 }
 
 pub fn to_string_tree_on_empty_returns_empty_tree_test() {
   from_list([])
-  |> fold.to_string_tree
+  |> datastream.to_string_tree
   |> string_tree.is_empty
   |> should.be_true
 }
 
 pub fn to_bit_array_concatenates_chunks_in_source_order_test() {
   from_list([<<1, 2>>, <<3>>, <<4, 5, 6>>])
-  |> fold.to_bit_array
+  |> datastream.to_bit_array
   |> should.equal(<<1, 2, 3, 4, 5, 6>>)
 }
 
 pub fn to_bit_array_on_empty_returns_empty_bit_array_test() {
-  from_list([]) |> fold.to_bit_array |> should.equal(<<>>)
+  from_list([]) |> datastream.to_bit_array |> should.equal(<<>>)
 }
 
 pub fn to_bit_array_preserves_byte_boundaries_test() {
   from_list([<<0xde, 0xad>>, <<0xbe, 0xef>>])
-  |> fold.to_bit_array
+  |> datastream.to_bit_array
   |> should.equal(<<0xde, 0xad, 0xbe, 0xef>>)
 }
 
 pub fn count_returns_number_of_elements_test() {
-  from_list([1, 2, 3]) |> fold.count |> should.equal(3)
+  from_list([1, 2, 3]) |> datastream.count |> should.equal(3)
 }
 
 pub fn count_on_empty_returns_zero_test() {
-  from_list([]) |> fold.count |> should.equal(0)
+  from_list([]) |> datastream.count |> should.equal(0)
 }
 
 pub fn first_returns_some_singleton_test() {
-  from_list([10]) |> fold.first |> should.equal(Some(10))
+  from_list([10]) |> datastream.first |> should.equal(Ok(10))
 }
 
 pub fn first_returns_some_head_of_many_test() {
-  from_list([1, 2, 3]) |> fold.first |> should.equal(Some(1))
+  from_list([1, 2, 3]) |> datastream.first |> should.equal(Ok(1))
 }
 
 pub fn first_on_empty_returns_none_test() {
-  from_list([]) |> fold.first |> should.equal(None)
+  from_list([]) |> datastream.first |> should.equal(Error(Nil))
 }
 
 pub fn first_terminates_on_infinite_stream_test() {
-  repeat(7) |> fold.first |> should.equal(Some(7))
+  repeat(7) |> datastream.first |> should.equal(Ok(7))
 }
 
 pub fn first_pulls_at_most_one_element_test() {
@@ -115,144 +115,144 @@ pub fn first_pulls_at_most_one_element_test() {
       }
     })
 
-  fold.first(stream) |> should.equal(Some(0))
+  datastream.first(stream) |> should.equal(Ok(0))
 }
 
 pub fn last_returns_some_tail_test() {
-  from_list([1, 2, 3]) |> fold.last |> should.equal(Some(3))
+  from_list([1, 2, 3]) |> datastream.last |> should.equal(Ok(3))
 }
 
 pub fn last_on_empty_returns_none_test() {
-  from_list([]) |> fold.last |> should.equal(None)
+  from_list([]) |> datastream.last |> should.equal(Error(Nil))
 }
 
 pub fn fold_sums_ints_test() {
   from_list([1, 2, 3])
-  |> fold.fold(from: 0, with: fn(acc, x) { acc + x })
+  |> datastream.fold(from: 0, with: fn(acc, x) { acc + x })
   |> should.equal(6)
 }
 
 pub fn fold_returns_initial_on_empty_test() {
   from_list([])
-  |> fold.fold(from: 10, with: fn(acc, x) { acc + x })
+  |> datastream.fold(from: 10, with: fn(acc, x) { acc + x })
   |> should.equal(10)
 }
 
 pub fn fold_concatenates_strings_test() {
   from_list(["a", "b", "c"])
-  |> fold.fold(from: "", with: fn(acc, x) { acc <> x })
+  |> datastream.fold(from: "", with: fn(acc, x) { acc <> x })
   |> should.equal("abc")
 }
 
 pub fn reduce_seeds_with_head_then_folds_tail_test() {
   from_list([1, 2, 3])
-  |> fold.reduce(with: fn(a, b) { a + b })
-  |> should.equal(Some(6))
+  |> datastream.reduce(with: fn(a, b) { a + b })
+  |> should.equal(Ok(6))
 }
 
 pub fn reduce_returns_some_only_on_singleton_test() {
   from_list([1])
-  |> fold.reduce(with: fn(a, b) { a + b })
-  |> should.equal(Some(1))
+  |> datastream.reduce(with: fn(a, b) { a + b })
+  |> should.equal(Ok(1))
 }
 
 pub fn reduce_on_empty_returns_none_test() {
   from_list([])
-  |> fold.reduce(with: fn(a, b) { a + b })
-  |> should.equal(None)
+  |> datastream.reduce(with: fn(a, b) { a + b })
+  |> should.equal(Error(Nil))
 }
 
 pub fn drain_returns_nil_test() {
-  from_list([1, 2, 3]) |> fold.drain |> should.equal(Nil)
+  from_list([1, 2, 3]) |> datastream.drain |> should.equal(Nil)
 }
 
 pub fn all_true_when_predicate_holds_for_every_element_test() {
   from_list([1, 2, 3])
-  |> fold.all(satisfying: fn(x) { x > 0 })
+  |> datastream.all(satisfying: fn(x) { x > 0 })
   |> should.equal(True)
 }
 
 pub fn all_false_on_first_failing_element_test() {
   from_list([1, -2, 3])
-  |> fold.all(satisfying: fn(x) { x > 0 })
+  |> datastream.all(satisfying: fn(x) { x > 0 })
   |> should.equal(False)
 }
 
 pub fn all_true_on_empty_test() {
   from_list([])
-  |> fold.all(satisfying: fn(x) { x > 0 })
+  |> datastream.all(satisfying: fn(x) { x > 0 })
   |> should.equal(True)
 }
 
 pub fn all_terminates_on_infinite_source_when_predicate_fails_test() {
   repeat(0)
-  |> fold.all(satisfying: fn(x) { x > 0 })
+  |> datastream.all(satisfying: fn(x) { x > 0 })
   |> should.equal(False)
 }
 
 pub fn any_true_when_some_element_matches_test() {
   from_list([0, 0, 1])
-  |> fold.any(satisfying: fn(x) { x > 0 })
+  |> datastream.any(satisfying: fn(x) { x > 0 })
   |> should.equal(True)
 }
 
 pub fn any_false_on_empty_test() {
   from_list([])
-  |> fold.any(satisfying: fn(x) { x > 0 })
+  |> datastream.any(satisfying: fn(x) { x > 0 })
   |> should.equal(False)
 }
 
 pub fn any_terminates_on_infinite_source_when_predicate_matches_test() {
   repeat(1)
-  |> fold.any(satisfying: fn(x) { x > 0 })
+  |> datastream.any(satisfying: fn(x) { x > 0 })
   |> should.equal(True)
 }
 
 pub fn find_returns_first_match_test() {
   from_list([1, 2, 3])
-  |> fold.find(satisfying: fn(x) { x > 1 })
-  |> should.equal(Some(2))
+  |> datastream.find(satisfying: fn(x) { x > 1 })
+  |> should.equal(Ok(2))
 }
 
 pub fn find_returns_none_when_nothing_matches_test() {
   from_list([1, 2, 3])
-  |> fold.find(satisfying: fn(x) { x > 99 })
-  |> should.equal(None)
+  |> datastream.find(satisfying: fn(x) { x > 99 })
+  |> should.equal(Error(Nil))
 }
 
 pub fn sum_int_sums_elements_test() {
-  from_list([1, 2, 3]) |> fold.sum_int |> should.equal(6)
+  from_list([1, 2, 3]) |> datastream.sum_int |> should.equal(6)
 }
 
 pub fn sum_int_on_empty_returns_zero_test() {
-  from_list([]) |> fold.sum_int |> should.equal(0)
+  from_list([]) |> datastream.sum_int |> should.equal(0)
 }
 
 pub fn sum_float_sums_elements_test() {
-  from_list([1.5, 2.5]) |> fold.sum_float |> should.equal(4.0)
+  from_list([1.5, 2.5]) |> datastream.sum_float |> should.equal(4.0)
 }
 
 pub fn sum_float_on_empty_returns_zero_point_zero_test() {
-  from_list([]) |> fold.sum_float |> should.equal(0.0)
+  from_list([]) |> datastream.sum_float |> should.equal(0.0)
 }
 
 pub fn product_int_multiplies_elements_test() {
-  from_list([1, 2, 3]) |> fold.product_int |> should.equal(6)
+  from_list([1, 2, 3]) |> datastream.product_int |> should.equal(6)
 }
 
 pub fn product_int_on_empty_returns_one_test() {
-  from_list([]) |> fold.product_int |> should.equal(1)
+  from_list([]) |> datastream.product_int |> should.equal(1)
 }
 
 pub fn collect_result_all_ok_returns_ok_list_test() {
   from_list([Ok(1), Ok(2), Ok(3)])
-  |> fold.collect_result
+  |> datastream.collect_result
   |> should.equal(Ok([1, 2, 3]))
 }
 
 pub fn collect_result_short_circuits_on_first_error_test() {
   from_list([Ok(1), Error("x"), Ok(2)])
-  |> fold.collect_result
+  |> datastream.collect_result
   |> should.equal(Error("x"))
 }
 
@@ -269,18 +269,18 @@ pub fn collect_result_does_not_pull_past_first_error_test() {
       }
     })
 
-  fold.collect_result(stream) |> should.equal(Error("halt"))
+  datastream.collect_result(stream) |> should.equal(Error("halt"))
 }
 
 pub fn collect_result_on_empty_returns_ok_empty_test() {
   from_list([])
-  |> fold.collect_result
+  |> datastream.collect_result
   |> should.equal(Ok([]))
 }
 
 pub fn partition_result_splits_oks_and_errors_in_order_test() {
   from_list([Ok(1), Error("a"), Ok(2), Error("b")])
-  |> fold.partition_result
+  |> datastream.partition_result
   |> should.equal(#([1, 2], ["a", "b"]))
 }
 
@@ -289,13 +289,13 @@ pub fn partition_result_visits_elements_after_first_error_test() {
   // collect_result does, Ok(3) would be missing from the oks list.
   // Its presence proves this reducer is a full-traversal one.
   from_list([Error("a"), Ok(3)])
-  |> fold.partition_result
+  |> datastream.partition_result
   |> should.equal(#([3], ["a"]))
 }
 
 pub fn partition_map_routes_via_split_test() {
   from_list([1, 2, 3, 4])
-  |> fold.partition_map(with: fn(x) {
+  |> datastream.partition_map(with: fn(x) {
     case x % 2 == 0 {
       True -> Ok(x)
       False -> Error(x)
@@ -308,39 +308,40 @@ pub fn partition_map_routes_via_split_test() {
 
 pub fn to_string_join_empty_returns_empty_string_test() {
   from_list([])
-  |> fold.to_string_join(with: ",")
+  |> datastream.to_string_join(with: ",")
   |> should.equal("")
 }
 
 pub fn to_string_join_single_element_no_separator_test() {
   // Single element: separator must NOT appear before or after.
   from_list(["alone"])
-  |> fold.to_string_join(with: ",")
+  |> datastream.to_string_join(with: ",")
   |> should.equal("alone")
 }
 
 pub fn to_string_join_three_elements_test() {
   from_list(["a", "b", "c"])
-  |> fold.to_string_join(with: ",")
+  |> datastream.to_string_join(with: ",")
   |> should.equal("a,b,c")
 }
 
 pub fn to_string_join_newline_separator_test() {
   from_list(["row1", "row2", "row3"])
-  |> fold.to_string_join(with: "\n")
+  |> datastream.to_string_join(with: "\n")
   |> should.equal("row1\nrow2\nrow3")
 }
 
 pub fn to_string_join_multi_char_separator_test() {
   from_list(["a", "b", "c"])
-  |> fold.to_string_join(with: " | ")
+  |> datastream.to_string_join(with: " | ")
   |> should.equal("a | b | c")
 }
 
 pub fn to_string_join_empty_separator_matches_to_string_test() {
   // Empty separator must produce the same output as plain `to_string`.
-  let stream_join = fold.to_string_join(from_list(["x", "y", "z"]), with: "")
-  let stream_concat = fold.to_string(from_list(["x", "y", "z"]))
+  let stream_join =
+    datastream.to_string_join(from_list(["x", "y", "z"]), with: "")
+  let stream_concat = datastream.to_string(from_list(["x", "y", "z"]))
   stream_join |> should.equal(stream_concat)
 }
 
@@ -348,15 +349,16 @@ pub fn to_string_join_preserves_empty_string_elements_test() {
   // Empty-string element must still trigger separator emission;
   // the output ", , " has two separators between three elements.
   from_list(["", "", ""])
-  |> fold.to_string_join(with: ", ")
+  |> datastream.to_string_join(with: ", ")
   |> should.equal(", , ")
 }
 
 pub fn to_string_tree_join_matches_to_string_join_test() {
   let stream = from_list(["a", "b", "c"])
   let via_tree =
-    fold.to_string_tree_join(stream, with: "-")
+    datastream.to_string_tree_join(stream, with: "-")
     |> string_tree.to_string
-  let via_string = fold.to_string_join(from_list(["a", "b", "c"]), with: "-")
+  let via_string =
+    datastream.to_string_join(from_list(["a", "b", "c"]), with: "-")
   via_tree |> should.equal(via_string)
 }

@@ -7,6 +7,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- Breaking: consolidate the public API into `datastream`. Remove the `source`, `stream`, `fold`, `sink`, `chunk`, `text`, `binary`, `erlang/*`, and `javascript/async` modules. Erlang-only operations and the JavaScript adapter keep their target restrictions.
+- Breaking: replace `Chunk(a)` with `List(a)` in `chunks_of`, `group_adjacent`, and `window_time`; remove the Chunk constructors, conversions, and list-operation wrappers.
+- Breaking: use one Result-returning entry point for operations with fallible arguments. Remove the corresponding `_with` and `_checked` variants. Parallel map/each require explicit worker and buffer limits, `merge` requires a buffer limit, and `length_prefixed` requires an explicit frame-size limit. Merge `StreamArgError`, `BinaryArgError`, and `ParArgError` into `ArgumentError`.
+- Breaking: return `Result(a, Nil)` from `first`, `last`, `reduce`, and `find`. Make `filter_map` accept a Result-returning callback. Rename `map_accum` to `map_with_state`, `dedupe_adjacent` to `deduplicate_adjacent`, and resource failures to `OpenFailed(reason:)` and `ReadFailed(reason:)`.
+- Breaking: remove `from_result` in favor of `once`, and `bridge_subject_stream` in favor of `to_list` followed by `from_list` for finite input. Remove `take_checked` and `drop_checked`; the remaining operations continue to treat negative counts as zero. Remove public target markers and parallel default constants.
+- Breaking: remove `each_ordered` and its variants, which ran side effects concurrently without guaranteeing their order. Use `map_ordered` followed by sequential `each` for effects that must follow input order, or `each_unordered` for concurrent effects.
+- Breaking: make `bytes`, `fixed_size`, and `delimited` yield Result elements. Rename the `IncompleteFrame` error type to `BinaryError` and add `UnalignedChunk`. Binary parsers reject a whole non-byte-aligned chunk, close the latest upstream continuation, and end after one error.
+- Breaking: represent `BinaryError.IncompleteFrame.expected` and `FrameTooLarge.claimed` as `#(high_32_bits, low_32_bits)` so eight-byte lengths remain exact on JavaScript. `got` and `max` remain `Int` byte counts.
+- Breaking: make `broadcast_bounded` return a construction Result and consumers with Result elements. On overflow, discard queued values, close the upstream, and report `QueueLimitExceeded` once to each active consumer. It no longer panics on overflow.
+- Breaking: validate timer durations, rate counts, frame-size limits, and binary delimiters at construction. Rename `rate_limit` labels to `up_to` and `every`. Timed operations return Result values; `timeout` permits zero for an immediate poll.
+
+```gleam
+// Before
+source.from_list([1, 2, 3])
+|> stream.map(with: fn(x) { x * 2 })
+|> fold.to_list
+
+// After: import datastream
+datastream.from_list([1, 2, 3])
+|> datastream.map(with: fn(x) { x * 2 })
+|> datastream.to_list
+```
+
+### Fixed
+
+- Close the remaining interruption signal when the main stream finishes, using the signal's latest state without closing the completed main stream again.
+- Preserve broadcast cancellations made inside source callbacks and finish overflow cleanup before error notification. A nested read with no queued value cancels that consumer while the upstream is busy.
+- Traverse large broadcast consumer lists without growing the JavaScript stack, and discard empty chunks from delimiter carry buffers.
+- Compare eight-byte declared lengths with the frame-size limit exactly, before consuming payload chunks, and preserve the full length in errors.
+- Keep `sample` and `window_time` elements in the window where their upstream pull returned when downstream consumption pauses.
+- Close the latest continuation when a JavaScript iterator is returned from inside a source callback. Reject a nested `next()` with a `TypeError` promise without repeating the upstream pull or stopping the outer call.
+
+### Documentation
+
+- Rewrite the README and public API comments around consumption, resource cleanup, and typed failures. Correct the descriptions of synchronous buffering, shared consumers, Subject ownership, descending ranges, UTF-8 error recovery, and memory used by unfinished text or binary records.
+- Move release verification instructions from the README to CONTRIBUTING.md. Add the JavaScript adapter page to HexDocs. Cleanup after a user callback raises remains best-effort; ordinary completion and typed-error handling retain their documented cleanup contract.
+
 ## [0.21.0] - 2026-11-22
 
 ### Changed
