@@ -11,6 +11,18 @@ import gleeunit
 import gleeunit/should
 
 @target(erlang)
+import gleam/int
+
+@target(erlang)
+import gleam/dynamic
+
+@target(erlang)
+import gleam/dynamic/decode
+
+@target(erlang)
+import gleam/erlang/atom
+
+@target(erlang)
 import gleam/erlang/process
 
 pub fn main() -> Nil {
@@ -945,17 +957,17 @@ fn logged_counter(
 ) -> Stream(Int) {
   source.resource(
     open: fn() {
-      ref.set(log, ["open", ..ref.get(log)])
+      ref.set(log, ["open", ..read(log)])
       0
     },
     next: fn(i) {
-      ref.set(log, ["next", ..ref.get(log)])
+      ref.set(log, ["next", ..read(log)])
       case i < limit {
         True -> Next(element: i, state: i + 1)
         False -> Done
       }
     },
-    close: fn(_) { ref.set(log, ["close", ..ref.get(log)]) },
+    close: fn(_) { ref.set(log, ["close", ..read(log)]) },
   )
 }
 
@@ -965,7 +977,7 @@ pub fn buffer_does_not_pull_or_close_upstream_after_done_test() {
   |> stream.buffer(prefetch: 5)
   |> fold.to_list
   |> should.equal([0, 1])
-  list.reverse(ref.get(log))
+  list.reverse(read(log))
   |> should.equal(["open", "next", "next", "next", "close"])
 }
 
@@ -976,6 +988,67 @@ pub fn buffer_take_after_upstream_done_closes_once_test() {
   |> stream.take(up_to: 1)
   |> fold.to_list
   |> should.equal([0])
-  list.reverse(ref.get(log))
+  list.reverse(read(log))
   |> should.equal(["open", "next", "next", "next", "close"])
+}
+
+// --- broadcast releases its shared state ------------------------------------
+
+@target(erlang)
+@external(erlang, "erlang", "get")
+fn process_dictionary() -> List(#(dynamic.Dynamic, dynamic.Dynamic))
+
+@target(erlang)
+pub fn unzip_releases_its_state_once_both_halves_finish_test() {
+  let before = list.length(process_dictionary())
+  int.range(from: 0, to: 100, with: Nil, run: fn(_, _) {
+    let #(left, right) = stream.unzip(from_list([#(1, 2), #(3, 4)]))
+    fold.to_list(left) |> should.equal([1, 3])
+    fold.to_list(right) |> should.equal([2, 4])
+  })
+  list.length(process_dictionary()) |> should.equal(before)
+}
+
+@target(erlang)
+pub fn broadcast_releases_its_state_once_every_consumer_is_closed_test() {
+  let before = list.length(process_dictionary())
+  int.range(from: 0, to: 100, with: Nil, run: fn(_, _) {
+    let assert [a, b, c] = stream.broadcast(over: repeat(1), into: 3)
+    a |> stream.take(up_to: 2) |> fold.to_list |> should.equal([1, 1])
+    b |> stream.take(up_to: 1) |> fold.to_list |> should.equal([1])
+    c |> stream.take(up_to: 0) |> fold.to_list |> should.equal([])
+  })
+  list.length(process_dictionary()) |> should.equal(before)
+}
+
+@target(erlang)
+pub fn broadcast_consumer_pulled_in_another_process_panics_clearly_test() {
+  let assert [a, _] = stream.broadcast(over: from_list([1, 2]), into: 2)
+  let pid = process.spawn_unlinked(fn() { fold.to_list(a) })
+  let monitor = process.monitor(pid)
+  let selector =
+    process.new_selector()
+    |> process.select_specific_monitor(monitor, fn(d) { d })
+  let assert Ok(process.ProcessDown(reason: process.Abnormal(reason), ..)) =
+    process.selector_receive(from: selector, within: 1000)
+  // The exit reason is `{Error, Stacktrace}`; the error carries the
+  // panic message.
+  let assert Ok(message) =
+    decode.run(
+      reason,
+      decode.at(
+        [0],
+        decode.at([atom.to_dynamic(atom.create("message"))], decode.string),
+      ),
+    )
+  message
+  |> string.contains("pulled in the process that created")
+  |> should.be_true
+}
+
+fn read(cell: ref.Ref(a)) -> a {
+  case ref.get(cell) {
+    Ok(value) -> value
+    Error(_) -> panic as "test ref was deleted"
+  }
 }

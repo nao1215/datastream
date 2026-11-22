@@ -70,8 +70,8 @@ pub fn to_async_iterable(stream: Stream(a)) -> AsyncIterable(a) {
 @target(javascript)
 fn pull_next(state: Ref(PullState(a))) -> Result(a, Nil) {
   case ref.get(state) {
-    Closed -> Error(Nil)
-    Open(stream) ->
+    Error(_) | Ok(Closed) -> Error(Nil)
+    Ok(Open(stream)) ->
       case datastream.pull(stream) {
         Done -> {
           ref.set(state, Closed)
@@ -88,8 +88,8 @@ fn pull_next(state: Ref(PullState(a))) -> Result(a, Nil) {
 @target(javascript)
 fn stop(state: Ref(PullState(a))) -> Nil {
   case ref.get(state) {
-    Closed -> Nil
-    Open(stream) -> {
+    Error(_) | Ok(Closed) -> Nil
+    Ok(Open(stream)) -> {
       ref.set(state, Closed)
       datastream.close(stream)
     }

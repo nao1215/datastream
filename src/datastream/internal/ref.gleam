@@ -17,9 +17,10 @@
 //// On Erlang the cell is keyed off an `:erlang.unique_integer/1`
 //// process-dictionary slot, which keeps the cost flat and confines
 //// state to the calling process (no extra spawned processes,
-//// no `:ets` tables, no atomics). On JavaScript it is a one-field
-//// mutable object. Both implementations are call-site-local; a `Ref`
-//// outlives only the surrounding pipeline.
+//// no `:ets` tables, no atomics). Reading or writing it from any
+//// other process panics. On JavaScript it is a one-field mutable
+//// object. The slot lives until `delete` is called, so the owner must
+//// delete it once the shared state is no longer needed.
 
 pub opaque type Ref(a) {
   Ref(handle: Handle(a))
@@ -37,11 +38,15 @@ fn do_new(value: a) -> Handle(a)
 
 @external(erlang, "datastream_ref_ffi", "get_ref")
 @external(javascript, "./ref_ffi.mjs", "get_ref")
-fn do_get(handle: Handle(a)) -> a
+fn do_get(handle: Handle(a)) -> Result(a, Nil)
 
 @external(erlang, "datastream_ref_ffi", "set_ref")
 @external(javascript, "./ref_ffi.mjs", "set_ref")
 fn do_set(handle: Handle(a), value: a) -> Nil
+
+@external(erlang, "datastream_ref_ffi", "delete_ref")
+@external(javascript, "./ref_ffi.mjs", "delete_ref")
+fn do_delete(handle: Handle(a)) -> Nil
 
 /// Allocate a new mutable cell holding `value`.
 @internal
@@ -49,9 +54,10 @@ pub fn new(value: a) -> Ref(a) {
   Ref(handle: do_new(value))
 }
 
-/// Read the current value of `ref`.
+/// Read the current value of `ref`, or `Error(Nil)` once it has been
+/// deleted.
 @internal
-pub fn get(ref: Ref(a)) -> a {
+pub fn get(ref: Ref(a)) -> Result(a, Nil) {
   let Ref(handle) = ref
   do_get(handle)
 }
@@ -61,4 +67,12 @@ pub fn get(ref: Ref(a)) -> a {
 pub fn set(ref: Ref(a), value: a) -> Nil {
   let Ref(handle) = ref
   do_set(handle, value)
+}
+
+/// Drop the value held by `ref`, releasing it. Later `get` calls return
+/// `Error(Nil)`.
+@internal
+pub fn delete(ref: Ref(a)) -> Nil {
+  let Ref(handle) = ref
+  do_delete(handle)
 }

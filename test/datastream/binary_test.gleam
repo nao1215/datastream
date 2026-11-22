@@ -460,12 +460,12 @@ pub fn length_prefixed_closes_upstream_after_frame_too_large_test() {
         [chunk, ..rest] -> Next(chunk, rest)
       }
     },
-    close: fn(_) { ref.set(closed, ref.get(closed) + 1) },
+    close: fn(_) { ref.set(closed, read(closed) + 1) },
   )
   |> binary.length_prefixed_with(prefix_size: 1, max_frame_size: 2)
   |> fold.to_list
   |> should.equal([Error(binary.FrameTooLarge(claimed: 5, max: 2))])
-  ref.get(closed) |> should.equal(1)
+  read(closed) |> should.equal(1)
 }
 
 pub fn length_prefixed_frames_split_over_many_chunks_test() {
@@ -491,4 +491,11 @@ pub fn delimited_delimiter_split_over_many_chunks_test() {
   |> binary.delimited(on: <<0, 0, 0>>)
   |> fold.to_list
   |> should.equal([<<1>>, <<2, 3>>, <<0, 4>>])
+}
+
+fn read(cell: ref.Ref(a)) -> a {
+  case ref.get(cell) {
+    Ok(value) -> value
+    Error(_) -> panic as "test ref was deleted"
+  }
 }

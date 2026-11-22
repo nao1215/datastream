@@ -139,3 +139,21 @@ pub fn text_split_without_delimiter_over_many_chunks_is_linear_test() {
   |> fold.to_list
   |> should.equal([2_000_000])
 }
+
+pub fn broadcast_lagging_consumer_queue_is_linear_test() {
+  let assert [fast, slow] =
+    stream.broadcast(over: source.range(from: 0, to: 100_000), into: 2)
+  fold.count(fast) |> should.equal(100_000)
+  fold.count(slow) |> should.equal(100_000)
+}
+
+pub fn broadcast_bounded_large_queue_is_linear_test() {
+  let assert [fast, slow] =
+    stream.broadcast_bounded(
+      over: source.range(from: 0, to: 100_000),
+      into: 2,
+      max_queue: 100_000,
+    )
+  fold.count(fast) |> should.equal(100_000)
+  fold.count(slow) |> should.equal(100_000)
+}
