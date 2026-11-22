@@ -211,6 +211,7 @@ type MapRun(a, b) {
     source: Stream(a),
     source_drained: Bool,
     mailbox: Mailbox(#(Int, b)),
+    reaper: Pid,
     running: Dict(Int, #(Pid, Monitor)),
     watching: Dict(Monitor, Int),
     finished: Dict(Int, b),
@@ -360,6 +361,7 @@ fn map_stream(stream: Stream(a), settings: MapSettings(a, b)) -> Stream(b) {
         source: stream,
         source_drained: False,
         mailbox: pump.new_mailbox(),
+        reaper: pump.start_reaper(),
         running: dict.new(),
         watching: dict.new(),
         finished: dict.new(),
@@ -377,18 +379,24 @@ fn map_active(run: MapRun(a, b)) -> Stream(b) {
 }
 
 @target(erlang)
-/// Close the upstream unless it is drained, kill the busy workers and
-/// drop whatever they still send.
+/// Close the upstream unless it is drained and stop the workers.
 fn map_abort(run: MapRun(a, b)) -> Nil {
   case run.source_drained {
     True -> Nil
     False -> datastream.close(run.source)
   }
+  stop_tasks(run)
+}
+
+@target(erlang)
+/// Kill the busy workers and drop whatever they still send.
+fn stop_tasks(run: MapRun(a, b)) -> Nil {
   dict.each(run.running, fn(_, worker) {
     let #(pid, monitor) = worker
     process.demonitor_process(monitor)
     process.kill(pid)
   })
+  pump.stop_reaper(run.reaper)
   pump.close_mailbox(run.mailbox)
 }
 
@@ -408,7 +416,7 @@ fn map_step(run: MapRun(a, b)) -> datastream.Step(b, Stream(b)) {
         ),
       )
     Error(_), True -> {
-      pump.close_mailbox(run.mailbox)
+      stop_tasks(run)
       Done
     }
     Error(_), False ->
@@ -459,15 +467,23 @@ fn map_dispatch(run: MapRun(a, b)) -> MapRun(a, b) {
   {
     True -> run
     False ->
-      case datastream.pull(run.source) {
+      // A panicking upstream must not leave the busy workers running.
+      case
+        pump.guard(fn() { datastream.pull(run.source) }, on_crash: fn() {
+          stop_tasks(run)
+        })
+      {
         Done -> MapRun(..run, source_drained: True)
         Next(element, rest) -> {
           let index = run.next_dispatch_index
           let function = run.settings.f
           let #(pid, monitor) =
-            pump.spawn_task(into: run.mailbox, tagged: index, running: fn() {
-              function(element)
-            })
+            pump.spawn_task(
+              into: run.mailbox,
+              tagged: index,
+              linked_to: run.reaper,
+              running: fn() { function(element) },
+            )
           map_dispatch(
             MapRun(
               ..run,

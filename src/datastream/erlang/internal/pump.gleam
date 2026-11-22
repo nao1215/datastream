@@ -178,15 +178,36 @@ pub fn forget(worker: Worker) -> Nil {
 // --- tasks ------------------------------------------------------------------
 
 @target(erlang)
+/// Start a process that kills the tasks linked to it when the calling
+/// process exits or when `stop_reaper` is called.
+@external(erlang, "datastream_mailbox_ffi", "start_reaper")
+pub fn start_reaper() -> Pid
+
+@target(erlang)
+@external(erlang, "datastream_mailbox_ffi", "stop_reaper")
+pub fn stop_reaper(reaper: Pid) -> Nil
+
+@target(erlang)
+/// Run `body`; if it panics or throws, run `on_crash` first and then let
+/// the same error continue.
+@external(erlang, "datastream_mailbox_ffi", "guard")
+pub fn guard(body: fn() -> a, on_crash on_crash: fn() -> Nil) -> a
+
+@target(erlang)
 /// Run `work` in a new monitored process that sends `#(id, result)` to
-/// `mailbox`.
+/// `mailbox`. The process links to `reaper`, so it is killed when the
+/// consumer exits even while `work` is still running.
 pub fn spawn_task(
   into mailbox: Mailbox(#(id, b)),
   tagged id: id,
+  linked_to reaper: Pid,
   running work: fn() -> b,
 ) -> #(Pid, Monitor) {
   let pid =
-    process.spawn_unlinked(fn() { send(to: mailbox, message: #(id, work())) })
+    process.spawn_unlinked(fn() {
+      process.link(reaper)
+      send(to: mailbox, message: #(id, work()))
+    })
   #(pid, process.monitor(pid))
 }
 

@@ -8,7 +8,7 @@
 
 -module(datastream_mailbox_ffi).
 -export([new/0, send/2, receive_event/3, receive_event_forever/2, close/1,
-         raise_worker_crash/2]).
+         raise_worker_crash/2, start_reaper/0, stop_reaper/1, guard/2]).
 
 new() ->
     erlang:alias().
@@ -63,3 +63,34 @@ raise_worker_crash(Context, Reason) ->
         line => 0,
         reason => Reason
     }).
+
+%% A reaper is linked to the tasks of one run and monitors the process
+%% that started it. It traps exits so a crashing task does not take it
+%% down, and when the starting process exits, or `stop_reaper/1` is
+%% called, it exits itself, which kills every task still linked to it.
+start_reaper() ->
+    Consumer = self(),
+    erlang:spawn(fun() ->
+        process_flag(trap_exit, true),
+        Monitor = erlang:monitor(process, Consumer),
+        reaper_loop(Monitor)
+    end).
+
+reaper_loop(Monitor) ->
+    receive
+        {'DOWN', Monitor, process, _, _} -> exit(consumer_down);
+        stop -> exit(shutdown);
+        {'EXIT', _, _} -> reaper_loop(Monitor)
+    end.
+
+stop_reaper(Reaper) ->
+    Reaper ! stop,
+    nil.
+
+%% Runs `Body`; if it raises, runs `OnCrash` and re-raises unchanged.
+guard(Body, OnCrash) ->
+    try Body()
+    catch Class:Reason:Stacktrace ->
+        OnCrash(),
+        erlang:raise(Class, Reason, Stacktrace)
+    end.

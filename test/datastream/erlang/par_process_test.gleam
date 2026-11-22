@@ -3,6 +3,9 @@
 //// re-running a stream and early exit.
 
 @target(erlang)
+import datastream
+
+@target(erlang)
 import datastream/erlang/internal/event_log
 
 @target(erlang)
@@ -265,4 +268,87 @@ pub fn merge_leaves_no_messages_after_early_exit_test() {
     #(taken, watchdog.mailbox_is_empty())
   })
   |> should.equal(Finished(#(5, True)))
+}
+
+// --- workers stop when the run ends abnormally -----------------------------
+
+@target(erlang)
+@external(erlang, "datastream_test_rescue_ffi", "rescue")
+fn rescue(thunk: fn() -> a) -> Result(a, Nil)
+
+@target(erlang)
+fn panics_after_four() {
+  source.unfold(from: 0, with: fn(i) {
+    case i < 4 {
+      True -> datastream.Next(i, i + 1)
+      False -> panic as "upstream"
+    }
+  })
+}
+
+@target(erlang)
+fn slow_by_index(x: Int) -> Int {
+  process.sleep(50 + x * 100)
+  x
+}
+
+@target(erlang)
+pub fn map_unordered_stops_its_tasks_when_the_upstream_panics_test() {
+  watchdog.run(within: 3000, running: fn() {
+    let outcome =
+      rescue(fn() {
+        panics_after_four()
+        |> par.map_unordered_with(
+          with: slow_by_index,
+          max_workers: 4,
+          max_buffer: 4,
+        )
+        |> fold.to_list
+      })
+    process.sleep(500)
+    #(outcome, watchdog.mailbox_is_empty())
+  })
+  |> should.equal(Finished(#(Error(Nil), True)))
+}
+
+@target(erlang)
+pub fn each_unordered_stops_its_effects_when_the_upstream_panics_test() {
+  let log = process.new_subject()
+  let outcome =
+    watchdog.run(within: 3000, running: fn() {
+      panics_after_four()
+      |> par.each_unordered_with(
+        with: fn(x) { process.send(log, slow_by_index(x)) },
+        max_workers: 4,
+        max_buffer: 4,
+      )
+    })
+  outcome |> should.equal(Crashed)
+  process.sleep(500)
+  drain_ints(log, []) |> should.equal([0])
+}
+
+@target(erlang)
+pub fn map_tasks_stop_when_the_consuming_process_dies_test() {
+  let log = process.new_subject()
+  let consumer =
+    process.spawn_unlinked(fn() {
+      source.range(from: 0, to: 4)
+      |> par.each_unordered(with: fn(x) {
+        process.sleep(200)
+        process.send(log, x)
+      })
+    })
+  process.sleep(50)
+  process.kill(consumer)
+  process.sleep(400)
+  drain_ints(log, []) |> should.equal([])
+}
+
+@target(erlang)
+fn drain_ints(log: process.Subject(Int), acc: List(Int)) -> List(Int) {
+  case process.receive(from: log, within: 0) {
+    Ok(x) -> drain_ints(log, [x, ..acc])
+    Error(_) -> list.reverse(acc)
+  }
 }
