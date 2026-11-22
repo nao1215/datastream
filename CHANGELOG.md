@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.22.0] - 2026-11-22
+
 ### Changed
 
 - Breaking: consolidate the public API into `datastream`. Remove the `source`, `stream`, `fold`, `sink`, `chunk`, `text`, `binary`, `erlang/*`, and `javascript/async` modules. Erlang-only operations and the JavaScript adapter keep their target restrictions.
