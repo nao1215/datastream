@@ -55,3 +55,18 @@ pub fn buffer_with_large_prefetch_is_linear_test() {
   |> fold.count
   |> should.equal(100_000)
 }
+
+pub fn flat_map_over_many_empty_inners_does_not_grow_the_stack_test() {
+  source.range(from: 0, to: 100_000)
+  |> stream.flat_map(with: fn(_) { source.empty() })
+  |> fold.count
+  |> should.equal(0)
+}
+
+pub fn group_adjacent_on_one_long_run_does_not_grow_the_stack_test() {
+  source.repeat(1)
+  |> stream.take(up_to: 1_000_000)
+  |> stream.group_adjacent(by: fn(x) { x })
+  |> fold.count
+  |> should.equal(1)
+}

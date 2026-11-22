@@ -384,47 +384,42 @@ pub fn flat_map(
   over stream: Stream(a),
   with f: fn(a) -> Stream(b),
 ) -> Stream(b) {
-  flat_map_outer(stream, f)
+  flat_map_active(None, stream, f)
 }
 
-fn flat_map_outer(outer: Stream(a), f: fn(a) -> Stream(b)) -> Stream(b) {
-  datastream.make(pull: fn() { flat_map_outer_pull(outer, f) }, close: fn() {
+fn flat_map_active(
+  inner: Option(Stream(b)),
+  outer: Stream(a),
+  f: fn(a) -> Stream(b),
+) -> Stream(b) {
+  datastream.make(pull: fn() { flat_map_pull(inner, outer, f) }, close: fn() {
+    case inner {
+      Some(inner) -> datastream.close(inner)
+      None -> Nil
+    }
     datastream.close(outer)
   })
 }
 
-fn flat_map_outer_pull(
+// One self-recursive loop over both streams, so the JavaScript target
+// runs it as a loop instead of growing the stack per empty inner.
+fn flat_map_pull(
+  inner: Option(Stream(b)),
   outer: Stream(a),
   f: fn(a) -> Stream(b),
 ) -> Step(b, Stream(b)) {
-  case datastream.pull(outer) {
-    Done -> Done
-    Next(element, outer_rest) -> flat_map_inner_pull(f(element), outer_rest, f)
-  }
-}
-
-fn flat_map_inner(
-  inner: Stream(b),
-  outer: Stream(a),
-  f: fn(a) -> Stream(b),
-) -> Stream(b) {
-  datastream.make(
-    pull: fn() { flat_map_inner_pull(inner, outer, f) },
-    close: fn() {
-      datastream.close(inner)
-      datastream.close(outer)
-    },
-  )
-}
-
-fn flat_map_inner_pull(
-  inner: Stream(b),
-  outer: Stream(a),
-  f: fn(a) -> Stream(b),
-) -> Step(b, Stream(b)) {
-  case datastream.pull(inner) {
-    Next(value, inner_rest) -> Next(value, flat_map_inner(inner_rest, outer, f))
-    Done -> flat_map_outer_pull(outer, f)
+  case inner {
+    Some(current) ->
+      case datastream.pull(current) {
+        Next(value, rest) -> Next(value, flat_map_active(Some(rest), outer, f))
+        Done -> flat_map_pull(None, outer, f)
+      }
+    None ->
+      case datastream.pull(outer) {
+        Done -> Done
+        Next(element, outer_rest) ->
+          flat_map_pull(Some(f(element)), outer_rest, f)
+      }
   }
 }
 
@@ -1331,38 +1326,23 @@ fn group_pull(
   key: fn(a) -> k,
 ) -> Step(#(k, Chunk(a)), Stream(#(k, Chunk(a)))) {
   case datastream.pull(source) {
-    Done -> group_flush(current_key, buffer)
-    Next(element, rest) ->
-      group_advance(current_key, buffer, element, rest, key)
-  }
-}
-
-fn group_flush(
-  current_key: Option(k),
-  buffer: List(a),
-) -> Step(#(k, Chunk(a)), Stream(#(k, Chunk(a)))) {
-  case current_key {
-    None -> Done
-    Some(k) -> Next(#(k, chunk.from_list(list.reverse(buffer))), empty_stream())
-  }
-}
-
-fn group_advance(
-  current_key: Option(k),
-  buffer: List(a),
-  element: a,
-  rest: Stream(a),
-  key: fn(a) -> k,
-) -> Step(#(k, Chunk(a)), Stream(#(k, Chunk(a)))) {
-  let element_key = key(element)
-  case current_key {
-    None -> group_pull(rest, Some(element_key), [element], key)
-    Some(prev_key) if prev_key == element_key ->
-      group_pull(rest, Some(element_key), [element, ..buffer], key)
-    Some(prev_key) ->
-      Next(
-        #(prev_key, chunk.from_list(list.reverse(buffer))),
-        group_active(rest, Some(element_key), [element], key),
-      )
+    Done ->
+      case current_key {
+        None -> Done
+        Some(k) ->
+          Next(#(k, chunk.from_list(list.reverse(buffer))), empty_stream())
+      }
+    Next(element, rest) -> {
+      let element_key = key(element)
+      case current_key {
+        Some(prev_key) if prev_key != element_key ->
+          Next(
+            #(prev_key, chunk.from_list(list.reverse(buffer))),
+            group_active(rest, Some(element_key), [element], key),
+          )
+        Some(_) -> group_pull(rest, current_key, [element, ..buffer], key)
+        None -> group_pull(rest, Some(element_key), [element], key)
+      }
+    }
   }
 }
