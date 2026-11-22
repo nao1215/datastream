@@ -165,11 +165,11 @@ pub fn drop(over stream: Stream(a), up_to n: Int) -> Stream(a) {
 /// Why a checked stream constructor refused its argument.
 ///
 /// Returned by `take_checked`, `drop_checked`, `buffer_checked`,
-/// `chunks_of_checked`, and any future non-panicking variant of a
-/// constructor that would otherwise reject its argument with a
-/// `panic`. Lets the caller surface argument-validation failures
-/// through `Result` instead of crashing the process — useful when
-/// the numeric argument comes from CLI flags, config files, or
+/// `chunks_of_checked`, and any future checked variant of a
+/// constructor that would otherwise panic on its argument or, for
+/// `take` and `drop`, treat a negative count as `0`. Lets the caller
+/// surface argument-validation failures through `Result` — useful
+/// when the numeric argument comes from CLI flags, config files, or
 /// request parameters.
 ///
 /// `function` names the constructor that rejected the value
@@ -186,8 +186,8 @@ pub type StreamArgError {
   NotPositive(function: String, given: Int)
 }
 
-/// Like `take`, but returns the argument-validation failure as a
-/// `Result` instead of panicking. Use this when `n` comes from
+/// Like `take`, but returns `Error` for a negative `n` instead of
+/// treating it as `0`. Use this when `n` comes from
 /// dynamic input (CLI, config, request parameters).
 ///
 /// On success the stream behaves identically to
@@ -212,8 +212,8 @@ pub fn take_checked(
   }
 }
 
-/// Like `drop`, but returns the argument-validation failure as a
-/// `Result` instead of panicking. Use this when `n` comes from
+/// Like `drop`, but returns `Error` for a negative `n` instead of
+/// treating it as `0`. Use this when `n` comes from
 /// dynamic input.
 ///
 /// On success the stream behaves identically to
