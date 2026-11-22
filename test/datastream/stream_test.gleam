@@ -1052,3 +1052,37 @@ fn read(cell: ref.Ref(a)) -> a {
     Error(_) -> panic as "test ref was deleted"
   }
 }
+
+// --- internal ref cell --------------------------------------------------------
+
+type Marker {
+  Undefined
+}
+
+pub fn ref_holds_a_value_that_looks_like_an_empty_slot_test() {
+  // On Erlang `Undefined` is the atom `undefined`, which the process
+  // dictionary also returns for a missing key.
+  let cell = ref.new(Undefined)
+  ref.get(cell) |> should.equal(Ok(Undefined))
+  ref.delete(cell)
+  ref.get(cell) |> should.equal(Error(Nil))
+}
+
+@target(erlang)
+pub fn ref_set_from_another_process_names_set_test() {
+  let cell = ref.new(1)
+  let pid = process.spawn_unlinked(fn() { ref.set(cell, 2) })
+  let monitor = process.monitor(pid)
+  let assert Ok(process.ProcessDown(reason: process.Abnormal(reason), ..)) =
+    process.new_selector()
+    |> process.select_specific_monitor(monitor, fn(d) { d })
+    |> process.selector_receive(within: 1000)
+  decode.run(
+    reason,
+    decode.at(
+      [0],
+      decode.at([atom.to_dynamic(atom.create("function"))], decode.string),
+    ),
+  )
+  |> should.equal(Ok("set"))
+}
