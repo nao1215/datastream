@@ -144,13 +144,16 @@ pub type ParArgError {
 }
 
 @target(erlang)
-fn arg_error_message(error: ParArgError) -> String {
-  case error {
-    InvalidMaxWorkers(..) -> "datastream/erlang/par: max_workers must be >= 1"
-    BufferLessThanWorkers(..) ->
-      "datastream/erlang/par: max_buffer must be >= max_workers"
-    InvalidMaxBuffer(..) ->
-      "datastream/erlang/par.merge: max_buffer must be >= 1"
+/// The panicking constructors are the checked ones plus this.
+fn or_panic(checked: Result(a, ParArgError)) -> a {
+  case checked {
+    Ok(value) -> value
+    Error(InvalidMaxWorkers(..)) ->
+      panic as "datastream/erlang/par: max_workers must be >= 1"
+    Error(BufferLessThanWorkers(..)) ->
+      panic as "datastream/erlang/par: max_buffer must be >= max_workers"
+    Error(InvalidMaxBuffer(..)) ->
+      panic as "datastream/erlang/par.merge: max_buffer must be >= 1"
   }
 }
 
@@ -249,12 +252,8 @@ pub fn map_unordered_with(
   max_workers max_workers: Int,
   max_buffer max_buffer: Int,
 ) -> Stream(b) {
-  case
-    map_unordered_with_checked(over: stream, with: f, max_workers:, max_buffer:)
-  {
-    Ok(mapped) -> mapped
-    Error(error) -> panic as arg_error_message(error)
-  }
+  map_unordered_with_checked(over: stream, with: f, max_workers:, max_buffer:)
+  |> or_panic
 }
 
 @target(erlang)
@@ -316,12 +315,8 @@ pub fn map_ordered_with(
   max_workers max_workers: Int,
   max_buffer max_buffer: Int,
 ) -> Stream(b) {
-  case
-    map_ordered_with_checked(over: stream, with: f, max_workers:, max_buffer:)
-  {
-    Ok(mapped) -> mapped
-    Error(error) -> panic as arg_error_message(error)
-  }
+  map_ordered_with_checked(over: stream, with: f, max_workers:, max_buffer:)
+  |> or_panic
 }
 
 @target(erlang)
@@ -509,13 +504,13 @@ pub fn each_ordered_with(
   max_workers max_workers: Int,
   max_buffer max_buffer: Int,
 ) -> Nil {
-  map_ordered_with(
+  each_ordered_with_checked(
     over: stream,
     with: effect,
-    max_workers: max_workers,
-    max_buffer: max_buffer,
+    max_workers:,
+    max_buffer:,
   )
-  |> fold.drain
+  |> or_panic
 }
 
 @target(erlang)
@@ -562,13 +557,13 @@ pub fn each_unordered_with(
   max_workers max_workers: Int,
   max_buffer max_buffer: Int,
 ) -> Nil {
-  map_unordered_with(
+  each_unordered_with_checked(
     over: stream,
     with: effect,
-    max_workers: max_workers,
-    max_buffer: max_buffer,
+    max_workers:,
+    max_buffer:,
   )
-  |> fold.drain
+  |> or_panic
 }
 
 @target(erlang)
@@ -651,10 +646,7 @@ pub fn merge_with(
   streams streams: List(Stream(a)),
   max_buffer max_buffer: Int,
 ) -> Stream(a) {
-  case merge_with_checked(streams:, max_buffer:) {
-    Ok(merged) -> merged
-    Error(error) -> panic as arg_error_message(error)
-  }
+  merge_with_checked(streams:, max_buffer:) |> or_panic
 }
 
 @target(erlang)

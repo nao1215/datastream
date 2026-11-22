@@ -190,27 +190,27 @@ pub fn records(over stream: Stream(String)) -> Stream(List(String)) {
 
 fn records_active(
   source: Stream(String),
-  acc_rev: List(String),
+  reversed_lines: List(String),
   source_drained: Bool,
 ) -> Stream(List(String)) {
   datastream.make(
-    pull: fn() { records_pull(source, acc_rev, source_drained) },
+    pull: fn() { records_pull(source, reversed_lines, source_drained) },
     close: fn() { core.close_unless_drained(source, drained: source_drained) },
   )
 }
 
 fn records_pull(
   source: Stream(String),
-  acc_rev: List(String),
+  reversed_lines: List(String),
   source_drained: Bool,
 ) -> Step(List(String), Stream(List(String))) {
   case source_drained {
-    True -> finish_records(source, acc_rev)
+    True -> finish_records(source, reversed_lines)
     False ->
       case datastream.pull(source) {
-        Done -> finish_records(source, acc_rev)
+        Done -> finish_records(source, reversed_lines)
         Next("", source_rest) ->
-          case acc_rev {
+          case reversed_lines {
             // Leading blank or back-to-back separator: skip without
             // emitting an empty record and keep pulling. The recursive
             // call only happens after the source has advanced, so this
@@ -218,23 +218,23 @@ fn records_pull(
             [] -> records_pull(source_rest, [], False)
             _ ->
               Next(
-                list.reverse(acc_rev),
+                list.reverse(reversed_lines),
                 records_active(source_rest, [], False),
               )
           }
         Next(line, source_rest) ->
-          records_pull(source_rest, [line, ..acc_rev], False)
+          records_pull(source_rest, [line, ..reversed_lines], False)
       }
   }
 }
 
 fn finish_records(
   source: Stream(String),
-  acc_rev: List(String),
+  reversed_lines: List(String),
 ) -> Step(List(String), Stream(List(String))) {
-  case acc_rev {
+  case reversed_lines {
     [] -> Done
-    _ -> Next(list.reverse(acc_rev), records_active(source, [], True))
+    _ -> Next(list.reverse(reversed_lines), records_active(source, [], True))
   }
 }
 
@@ -312,10 +312,10 @@ fn split_pull(state: Split) -> Step(String, Stream(String)) {
       )
     Error(_) -> {
       let #(recent, older) =
-        keep_newest(
+        core.keep_newest(
           [state.unscanned, ..state.recent],
-          string.byte_size(state.delimiter) - 1,
-          [],
+          holding: string.byte_size(state.delimiter) - 1,
+          measured_by: string.byte_size,
         )
       let state =
         Split(
@@ -340,20 +340,6 @@ fn split_pull(state: Split) -> Step(String, Stream(String)) {
           }
       }
     }
-  }
-}
-
-// Split newest-first `chunks` into the newest ones that together hold
-// at least `wanted` bytes and the older rest.
-fn keep_newest(
-  chunks: List(String),
-  wanted: Int,
-  kept_rev: List(String),
-) -> #(List(String), List(String)) {
-  case chunks, wanted > 0 {
-    [chunk, ..older], True ->
-      keep_newest(older, wanted - string.byte_size(chunk), [chunk, ..kept_rev])
-    _, _ -> #(list.reverse(kept_rev), chunks)
   }
 }
 
@@ -541,11 +527,11 @@ fn classify_and_extract(
   source_drained: Bool,
 ) -> Decoded {
   case lead {
-    l if l < 0x80 -> DecodeOk(<<l>>, rest)
-    l if l < 0xC2 -> DecodeInvalid(rest)
-    l if l < 0xE0 -> collect_continuation(lead, <<>>, rest, 1, source_drained)
-    l if l < 0xF0 -> collect_continuation(lead, <<>>, rest, 2, source_drained)
-    l if l < 0xF5 -> collect_continuation(lead, <<>>, rest, 3, source_drained)
+    _ if lead < 0x80 -> DecodeOk(<<lead>>, rest)
+    _ if lead < 0xC2 -> DecodeInvalid(rest)
+    _ if lead < 0xE0 -> collect_continuation(lead, <<>>, rest, 1, source_drained)
+    _ if lead < 0xF0 -> collect_continuation(lead, <<>>, rest, 2, source_drained)
+    _ if lead < 0xF5 -> collect_continuation(lead, <<>>, rest, 3, source_drained)
     _ -> DecodeInvalid(rest)
   }
 }

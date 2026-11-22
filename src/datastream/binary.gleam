@@ -403,7 +403,11 @@ fn delimited_pull(state: Delimited) -> Step(BitArray, Stream(BitArray)) {
       }
     Error(_) -> {
       let #(recent, older) =
-        keep_newest([state.unscanned, ..state.recent], delimiter_size - 1)
+        core.keep_newest(
+          [state.unscanned, ..state.recent],
+          holding: delimiter_size - 1,
+          measured_by: bit_array.byte_size,
+        )
       let state =
         Delimited(
           ..state,
@@ -433,30 +437,6 @@ fn delimited_pull(state: Delimited) -> Step(BitArray, Stream(BitArray)) {
           }
       }
     }
-  }
-}
-
-// Split newest-first `chunks` into the newest ones that together hold
-// at least `wanted` bytes and the older rest.
-fn keep_newest(
-  chunks: List(BitArray),
-  wanted: Int,
-) -> #(List(BitArray), List(BitArray)) {
-  do_keep_newest(chunks, wanted, [])
-}
-
-fn do_keep_newest(
-  chunks: List(BitArray),
-  wanted: Int,
-  kept_rev: List(BitArray),
-) -> #(List(BitArray), List(BitArray)) {
-  case chunks, wanted > 0 {
-    [chunk, ..older], True ->
-      do_keep_newest(older, wanted - bit_array.byte_size(chunk), [
-        chunk,
-        ..kept_rev
-      ])
-    _, _ -> #(list.reverse(kept_rev), chunks)
   }
 }
 

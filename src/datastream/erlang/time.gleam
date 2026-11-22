@@ -114,29 +114,13 @@ fn debounce_step(
     False, None ->
       case pump.next_forever(state.upstream) {
         #(upstream, Element(element)) ->
-          debounce_step(
-            DebounceState(
-              ..state,
-              upstream:,
-              latest: Some(element),
-              deadline: pump.now_ms() + ms,
-            ),
-            ms,
-          )
+          debounce_step(restart_quiet_period(state, upstream, element, ms), ms)
         #(_, Exhausted) -> Done
       }
     False, Some(value) ->
       case pump.next(state.upstream, within: ms_until(state.deadline)) {
         #(upstream, Ok(Element(element))) ->
-          debounce_step(
-            DebounceState(
-              ..state,
-              upstream:,
-              latest: Some(element),
-              deadline: pump.now_ms() + ms,
-            ),
-            ms,
-          )
+          debounce_step(restart_quiet_period(state, upstream, element, ms), ms)
         #(upstream, Ok(Exhausted)) ->
           Next(
             value,
@@ -160,6 +144,23 @@ fn debounce_step(
           )
       }
   }
+}
+
+@target(erlang)
+/// A new element arrived: it becomes the candidate and the quiet period
+/// starts again.
+fn restart_quiet_period(
+  state: DebounceState(a),
+  upstream: Pump(a),
+  element: a,
+  ms: Int,
+) -> DebounceState(a) {
+  DebounceState(
+    ..state,
+    upstream:,
+    latest: Some(element),
+    deadline: pump.now_ms() + ms,
+  )
 }
 
 // --- throttle ------------------------------------------------------------

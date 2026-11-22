@@ -54,13 +54,13 @@ pub fn new_mailbox() -> Mailbox(message)
 
 @target(erlang)
 @external(erlang, "datastream_mailbox_ffi", "send")
-pub fn send(to mailbox: Mailbox(message), message message: message) -> Nil
+fn send(to mailbox: Mailbox(message), message message: message) -> Nil
 
 @target(erlang)
 /// Wait up to `ms` milliseconds for a message, or for the exit of a
 /// worker whose monitor is a key of `watching`.
 @external(erlang, "datastream_mailbox_ffi", "receive_event")
-pub fn receive(
+fn receive(
   from mailbox: Mailbox(message),
   watching watching: Dict(Monitor, id),
   within ms: Int,

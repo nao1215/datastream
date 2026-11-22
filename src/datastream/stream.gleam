@@ -19,13 +19,10 @@
 
 import datastream.{type Step, type Stream, Done, Next}
 import datastream/chunk.{type Chunk}
+import datastream/internal/core
 import datastream/internal/ref.{type Ref}
 import gleam/list
 import gleam/option.{type Option, None, Some}
-
-fn noop() -> Nil {
-  Nil
-}
 
 // --- single-stream combinators ----------------------------------------------
 
@@ -438,7 +435,7 @@ pub fn flatten(streams: Stream(Stream(a))) -> Stream(a) {
 /// next one is opened. On early exit, the active stream is closed.
 pub fn concat(streams: List(Stream(a))) -> Stream(a) {
   case streams {
-    [] -> empty_stream()
+    [] -> core.empty()
     [first, ..rest] -> concat_active(first, rest)
   }
 }
@@ -461,10 +458,6 @@ fn concat_pull(
         [next, ..rest] -> concat_pull(next, rest)
       }
   }
-}
-
-fn empty_stream() -> Stream(a) {
-  datastream.make(pull: fn() { Done }, close: noop)
 }
 
 /// Left-fold the stream, emitting one output per input.
@@ -664,9 +657,9 @@ fn dedupe_pull(stream: Stream(a), last: Option(a)) -> Step(a, Stream(a)) {
 /// good faith but resource cleanup wins over delivery, matching
 /// `take`'s behaviour.
 pub fn buffer(over stream: Stream(a), prefetch capacity: Int) -> Stream(a) {
-  case capacity < 1 {
-    True -> panic as "datastream/stream.buffer: capacity must be >= 1"
-    False -> new_buffer(stream, capacity)
+  case buffer_checked(over: stream, prefetch: capacity) {
+    Ok(buffered) -> buffered
+    Error(_) -> panic as "datastream/stream.buffer: capacity must be >= 1"
   }
 }
 
@@ -1169,9 +1162,9 @@ pub fn unzip(stream: Stream(#(a, b))) -> #(Stream(a), Stream(b)) {
 /// The trailing chunk may be smaller than `size` when the source
 /// length is not divisible.
 pub fn chunks_of(over stream: Stream(a), into size: Int) -> Stream(Chunk(a)) {
-  case size < 1 {
-    True -> panic as "datastream/stream.chunks_of: size must be >= 1"
-    False -> chunks_active(stream, [], 0, size)
+  case chunks_of_checked(over: stream, into: size) {
+    Ok(chunked) -> chunked
+    Error(_) -> panic as "datastream/stream.chunks_of: size must be >= 1"
   }
 }
 
@@ -1217,7 +1210,7 @@ fn chunks_pull(
     Done ->
       case buffer {
         [] -> Done
-        _ -> Next(chunk.from_list(list.reverse(buffer)), empty_stream())
+        _ -> Next(chunk.from_list(list.reverse(buffer)), core.empty())
       }
     Next(element, rest) -> {
       let new_count = count + 1
@@ -1265,7 +1258,7 @@ fn group_pull(
       case current_key {
         None -> Done
         Some(k) ->
-          Next(#(k, chunk.from_list(list.reverse(buffer))), empty_stream())
+          Next(#(k, chunk.from_list(list.reverse(buffer))), core.empty())
       }
     Next(element, rest) -> {
       let element_key = key(element)
