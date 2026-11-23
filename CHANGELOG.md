@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.23.0] - 2026-11-23
+
 ### Changed
 
 - On Erlang, `split` matched a nonempty delimiter only against whole grapheme clusters, so `"\r"` did not match inside CRLF and `"e"` did not match before a combining mark, unless a chunk boundary fell there. It now matches code points on both targets, independent of chunk boundaries. Erlang callers that split CRLF text on `"\r"` now get pieces that start with `"\n"`, as on JavaScript.
