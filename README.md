@@ -39,7 +39,7 @@ pub fn main() {
 }
 ```
 
-This prints `[2, 4, 6, 8, 10]`. [`resource`](https://hexdocs.pm/datastream/datastream.html#resource) connects a pipeline to a file, socket, or cursor using open, next, and close callbacks. It opens on the first pull and closes on completion or early termination. A pipeline that is never pulled opens nothing.
+This prints `[2, 4, 6, 8, 10]`. [`resource`](https://hexdocs.pm/datastream/datastream.html#resource) connects a pipeline to a file, socket, or cursor using open, next, and close callbacks. It opens on the first pull and closes once on completion, early termination, or when a callback raises. A pipeline that is never pulled opens nothing.
 
 The API uses one import, `datastream`. See [HexDocs](https://hexdocs.pm/datastream/datastream.html) for construction, transformations, terminals, text parsing, and binary framing.
 

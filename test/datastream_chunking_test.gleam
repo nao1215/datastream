@@ -64,11 +64,12 @@ fn text_pieces_generator() -> Generator(List(String)) {
   )
 }
 
-/// The same pieces without the combining accent. On Erlang
-/// `string.split` works on graphemes, so a delimiter followed by a
-/// combining mark is not a delimiter inside one chunk but is one at a
-/// chunk boundary (and JavaScript splits on code units either way).
-/// The delimiter relations leave that case out.
+/// The same pieces without the combining accent, for comparing with
+/// `string.split`. On Erlang `string.split` matches whole graphemes, so
+/// it does not split `e` followed by a combining mark, while
+/// `datastream.split` matches code points on both targets.
+/// `text_chunking_test.gleam` compares that case with a code point
+/// oracle.
 fn text_pieces_without_combining_generator() -> Generator(List(String)) {
   generator.list_of(
     generator.element_of([
@@ -179,7 +180,7 @@ pub fn records_is_invariant_under_rechunking_test() -> Nil {
 }
 
 pub fn split_on_single_char_is_invariant_under_rechunking_test() -> Nil {
-  text_relation_over(text_pieces_without_combining_generator(), fn(chunks) {
+  text_relation_over(text_pieces_generator(), fn(chunks) {
     datastream.to_list(datastream.split(
       over: datastream.from_list(chunks),
       on: ",",
@@ -188,7 +189,7 @@ pub fn split_on_single_char_is_invariant_under_rechunking_test() -> Nil {
 }
 
 pub fn split_on_multi_char_is_invariant_under_rechunking_test() -> Nil {
-  text_relation_over(text_pieces_without_combining_generator(), fn(chunks) {
+  text_relation_over(text_pieces_generator(), fn(chunks) {
     datastream.to_list(datastream.split(
       over: datastream.from_list(chunks),
       on: ",;",

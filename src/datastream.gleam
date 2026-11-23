@@ -6,14 +6,17 @@
 ////
 //// ## Resources
 ////
-//// `resource` and `try_resource` open on the first pull and close on completion or early termination. Typed failures such as a binary framing error also close the active upstream. Cleanup after a user callback raises is best-effort; its completion and call count are not guaranteed.
+//// `resource` and `try_resource` open on the first pull and close on completion or early termination. Typed failures such as a binary framing error also close the active upstream.
+////
+//// If a callback raises during a terminal operation, the terminal closes every resource still open in that run before the exception continues. Each resource closes once, at its latest state, newest first. Exceptions raised by `close` during that cleanup are discarded so the original exception is the one reported. On Erlang, a process killed by an exit signal from another process runs no cleanup.
 ////
 //// ## Targets and workers
 ////
 //// The synchronous core runs on Erlang and JavaScript. Parallel, Subject, and time operations require Erlang. The JavaScript async iterator adapter is described in the [JavaScript guide](javascript.html).
 ////
-//// Parallel map and each pull their source in the caller and run callbacks in workers. `merge`, `race`, time operators, and `timeout` pull sources inside workers, so those sources must not depend on the caller's process. Stopping a source worker requests cleanup after any pull callback in progress returns; a callback that never returns can delay cleanup indefinitely. Worker exceptions propagate after cleanup is attempted.
+//// Parallel map and each pull their source in the caller and run callbacks in workers. `merge`, `race`, time operators, and `timeout` pull sources inside workers, so those sources must not depend on the caller's process. Stopping a source worker requests cleanup after any pull callback in progress returns; a callback that never returns can delay cleanup indefinitely. A source that raises in a worker is closed there, and the exception is re-raised in the consumer after the other workers stop. If the consumer raises, its terminal stops the workers it started.
 
+import datastream/internal/cleanup
 import datastream/internal/ref.{type Ref}
 import gleam/bit_array
 import gleam/bytes_tree
@@ -112,7 +115,7 @@ fn make(
 ///
 /// `open` runs on the first pull. Each terminal operation starts a fresh run. A pipeline that is never pulled, including one consumed through `take(up_to: 0)`, leaves the resource unopened.
 ///
-/// When `next` returns `Done`, `close` receives the current state. Early termination through operations such as `first`, `take`, or `try_each` closes the latest continuation once. User callbacks that panic have best-effort cleanup; neither cleanup completion nor its call count is guaranteed in that case.
+/// When `next` returns `Done`, `close` receives the current state. Early termination through operations such as `first`, `take`, or `try_each` closes the latest continuation once. If any callback raises during a terminal operation, `close` receives the latest state once before the exception continues. If `open` raises, `close` is not called.
 ///
 /// `close` returns `Nil`, so its failures cannot be returned through a terminal's result. Manage the lifecycle outside the stream if the application must receive a typed close error.
 pub fn resource(
@@ -123,10 +126,16 @@ pub fn resource(
   Stream(
     pull: fn() {
       let initial = open()
-      pull_resource(initial, next, close)
+      pull_resource(initial, next, close, resource_cell(initial, close))
     },
     close: noop,
   )
+}
+
+// One cell per run holds the cleanup for the latest state, so the state is
+// closed once even if a callback raises before a continuation is returned.
+fn resource_cell(state: s, close: fn(s) -> Nil) -> cleanup.Cell {
+  cleanup.new(fn() { close(state) })
 }
 
 /// Variant of `resource` whose `open` may fail. On `Error(e)` the
@@ -145,7 +154,8 @@ fn resource_with_open_error(
   Stream(
     pull: fn() {
       case open() {
-        Ok(state) -> pull_resource(state, next, close)
+        Ok(state) ->
+          pull_resource(state, next, close, resource_cell(state, close))
         Error(e) ->
           Next(on_open_error(e), Stream(pull: fn() { Done }, close: noop))
       }
@@ -158,20 +168,24 @@ fn pull_resource(
   state: s,
   next: fn(s) -> Step(a, s),
   close: fn(s) -> Nil,
+  cell: cleanup.Cell,
 ) -> Step(a, Stream(a)) {
   case next(state) {
     Done -> {
-      close(state)
+      cleanup.take(cell, or: fn() { close(state) })
       Done
     }
-    Next(element, next_state) ->
+    Next(element, next_state) -> {
+      let close_next = fn() { close(next_state) }
+      cleanup.set(cell, close_next)
       Next(
         element,
         Stream(
-          pull: fn() { pull_resource(next_state, next, close) },
-          close: fn() { close(next_state) },
+          pull: fn() { pull_resource(next_state, next, close, cell) },
+          close: fn() { cleanup.take(cell, or: close_next) },
         ),
       )
+    }
   }
 }
 
@@ -1012,6 +1026,9 @@ type BroadcastState(a) {
   BroadcastPulling(consumers: List(Consumer(a)), policy: QueuePolicy(a))
   BroadcastClosing(terminal: a, pending: List(Int))
   BroadcastFailed(terminal: a, pending: List(Int))
+  // The upstream raised during a pull. Consumers read their queued values
+  // and then raise as well.
+  BroadcastBroken(consumers: List(Consumer(a)))
 }
 
 type QueuePolicy(a) {
@@ -1042,6 +1059,8 @@ type ConsumerPull(a) {
 /// ## Panics
 ///
 /// On Erlang, consume each returned stream in the process that called `broadcast`. Reading it in another process panics because its shared state belongs to the creating process.
+///
+/// If the upstream raises while one consumer pulls it, the upstream is closed and each other consumer raises after reading the values already queued for it.
 pub fn broadcast(over stream: Stream(a), into count: Int) -> List(Stream(a)) {
   stream_start_broadcast(stream, count, Unlimited)
 }
@@ -1089,49 +1108,96 @@ fn stream_start_broadcast(
       []
     }
     False -> {
-      let state_ref = stream_broadcast_state(stream, count, policy)
+      let shared = stream_broadcast_state(stream, count, policy)
       list.repeat(Nil, times: count)
       |> list.index_map(fn(_, consumer_id) {
-        stream_broadcast_consumer(state_ref, consumer_id)
+        stream_broadcast_member(shared, consumer_id)
       })
     }
   }
+}
+
+// `frame` owns the cleanup of resources opened by upstream pulls, so a
+// consumer's failure does not close an upstream that other consumers
+// still read.
+type Shared(a) {
+  Shared(state: Ref(BroadcastState(a)), frame: cleanup.Frame)
 }
 
 fn stream_broadcast_state(
   stream: Stream(a),
   count: Int,
   policy: QueuePolicy(a),
-) -> Ref(BroadcastState(a)) {
+) -> Shared(a) {
   let empty_queue = Consumer(front: [], back: [], size: 0, active: True)
-  ref.new(BroadcastRunning(
-    upstream: Some(stream),
-    consumers: list.repeat(empty_queue, times: count),
-    policy:,
-  ))
-}
-
-fn stream_broadcast_consumer(
-  state_ref: Ref(BroadcastState(a)),
-  consumer_id: Int,
-) -> Stream(a) {
-  make(
-    pull: fn() { stream_broadcast_pull(state_ref, consumer_id) },
-    close: fn() { stream_broadcast_finish(state_ref, consumer_id) },
+  Shared(
+    state: ref.new(BroadcastRunning(
+      upstream: Some(stream),
+      consumers: list.repeat(empty_queue, times: count),
+      policy:,
+    )),
+    frame: cleanup.new_frame(),
   )
 }
 
-fn stream_broadcast_pull(
-  state_ref: Ref(BroadcastState(a)),
+// The first pull creates a cell that finishes the consumer if the terminal
+// reading it raises. A consumer that is never pulled holds no cell.
+fn stream_broadcast_member(shared: Shared(a), consumer_id: Int) -> Stream(a) {
+  make(
+    pull: fn() {
+      let cell =
+        cleanup.new(fn() { stream_broadcast_finish(shared, consumer_id) })
+      pull(stream_broadcast_consumer(shared, consumer_id, cell))
+    },
+    close: fn() { stream_broadcast_finish(shared, consumer_id) },
+  )
+}
+
+fn stream_broadcast_consumer(
+  shared: Shared(a),
   consumer_id: Int,
-) -> Step(a, Stream(a)) {
-  case ref.get(state_ref) {
+  cell: cleanup.Cell,
+) -> Stream(a) {
+  make(
+    pull: fn() {
+      cleanup.touch(cell)
+      case stream_broadcast_pull(shared, consumer_id) {
+        Next(element, Nil) ->
+          Next(element, stream_broadcast_consumer(shared, consumer_id, cell))
+        Done -> {
+          cleanup.discard(cell)
+          Done
+        }
+      }
+    },
+    close: fn() {
+      cleanup.take(cell, or: fn() {
+        stream_broadcast_finish(shared, consumer_id)
+      })
+    },
+  )
+}
+
+fn stream_broadcast_pull(shared: Shared(a), consumer_id: Int) -> Step(a, Nil) {
+  case ref.get(shared.state) {
     Error(Nil) -> Done
     Ok(BroadcastFailed(terminal, pending)) ->
-      stream_broadcast_emit_terminal(state_ref, terminal, pending, consumer_id)
+      stream_broadcast_emit_terminal(shared, terminal, pending, consumer_id)
+    Ok(BroadcastBroken(consumers)) ->
+      case stream_pop_queued(consumers, consumer_id) {
+        InactiveConsumer -> Done
+        QueuedElement(element, consumers) -> {
+          ref.set(shared.state, BroadcastBroken(consumers:))
+          Next(element, Nil)
+        }
+        WaitingConsumer -> {
+          stream_broadcast_finish(shared, consumer_id)
+          stream_broadcast_raise_broken()
+        }
+      }
     Ok(BroadcastClosing(terminal, pending)) -> {
       ref.set(
-        state_ref,
+        shared.state,
         BroadcastClosing(
           terminal:,
           pending: list.filter(pending, fn(index) { index != consumer_id }),
@@ -1143,11 +1209,11 @@ fn stream_broadcast_pull(
       case stream_pop_queued(consumers, consumer_id) {
         InactiveConsumer -> Done
         QueuedElement(element, consumers) -> {
-          ref.set(state_ref, BroadcastPulling(consumers:, policy:))
-          Next(element, stream_broadcast_consumer(state_ref, consumer_id))
+          ref.set(shared.state, BroadcastPulling(consumers:, policy:))
+          Next(element, Nil)
         }
         WaitingConsumer -> {
-          stream_broadcast_finish(state_ref, consumer_id)
+          stream_broadcast_finish(shared, consumer_id)
           Done
         }
       }
@@ -1155,12 +1221,15 @@ fn stream_broadcast_pull(
       case stream_pop_queued(consumers, consumer_id) {
         InactiveConsumer -> Done
         QueuedElement(element, consumers) -> {
-          ref.set(state_ref, BroadcastRunning(upstream:, consumers:, policy:))
-          Next(element, stream_broadcast_consumer(state_ref, consumer_id))
+          ref.set(
+            shared.state,
+            BroadcastRunning(upstream:, consumers:, policy:),
+          )
+          Next(element, Nil)
         }
         WaitingConsumer ->
           stream_broadcast_pull_source(
-            state_ref,
+            shared,
             consumer_id,
             upstream,
             consumers,
@@ -1171,20 +1240,24 @@ fn stream_broadcast_pull(
 }
 
 fn stream_broadcast_pull_source(
-  state_ref: Ref(BroadcastState(a)),
+  shared: Shared(a),
   consumer_id: Int,
   upstream: Option(Stream(a)),
   consumers: List(Consumer(a)),
   policy: QueuePolicy(a),
-) -> Step(a, Stream(a)) {
+) -> Step(a, Nil) {
   case upstream {
     None -> {
-      stream_broadcast_finish(state_ref, consumer_id)
+      stream_broadcast_finish(shared, consumer_id)
       Done
     }
     Some(upstream) -> {
-      ref.set(state_ref, BroadcastPulling(consumers:, policy:))
-      stream_broadcast_after_pull(state_ref, consumer_id, pull(upstream))
+      ref.set(shared.state, BroadcastPulling(consumers:, policy:))
+      let step =
+        cleanup.guard_in(shared.frame, fn() { pull(upstream) }, fn() {
+          stream_broadcast_abandon(shared)
+        })
+      stream_broadcast_after_pull(shared, consumer_id, step)
     }
   }
 }
@@ -1192,33 +1265,33 @@ fn stream_broadcast_pull_source(
 // The callback may cancel consumers or pop their queues. Commit against
 // that latest state, retaining sole ownership of the returned continuation.
 fn stream_broadcast_after_pull(
-  state_ref: Ref(BroadcastState(a)),
+  shared: Shared(a),
   consumer_id: Int,
   step: Step(a, Stream(a)),
-) -> Step(a, Stream(a)) {
-  case ref.get(state_ref), step {
+) -> Step(a, Nil) {
+  case ref.get(shared.state), step {
     Ok(BroadcastPulling(consumers, policy)), Done -> {
       let consumers = stream_broadcast_cancel(consumers, consumer_id)
       case list.any(consumers, fn(consumer) { consumer.active }) {
         True ->
           ref.set(
-            state_ref,
+            shared.state,
             BroadcastRunning(upstream: None, consumers:, policy:),
           )
-        False -> ref.delete(state_ref)
+        False -> ref.delete(shared.state)
       }
       Done
     }
     Ok(BroadcastPulling(consumers, policy)), Next(element, rest) ->
       case list.any(consumers, fn(consumer) { consumer.active }) {
         False -> {
-          ref.delete(state_ref)
+          ref.delete(shared.state)
           close(rest)
           Done
         }
         True ->
           stream_broadcast_commit(
-            state_ref,
+            shared,
             consumer_id,
             consumers,
             policy,
@@ -1230,11 +1303,13 @@ fn stream_broadcast_after_pull(
     | Ok(BroadcastRunning(..)), Done
     | Ok(BroadcastClosing(..)), Done
     | Ok(BroadcastFailed(..)), Done
+    | Ok(BroadcastBroken(..)), Done
     -> Done
     Error(Nil), Next(_, rest)
     | Ok(BroadcastRunning(..)), Next(_, rest)
     | Ok(BroadcastClosing(..)), Next(_, rest)
     | Ok(BroadcastFailed(..)), Next(_, rest)
+    | Ok(BroadcastBroken(..)), Next(_, rest)
     -> {
       close(rest)
       Done
@@ -1243,13 +1318,13 @@ fn stream_broadcast_after_pull(
 }
 
 fn stream_broadcast_commit(
-  state_ref: Ref(BroadcastState(a)),
+  shared: Shared(a),
   consumer_id: Int,
   consumers: List(Consumer(a)),
   policy: QueuePolicy(a),
   element: a,
   rest: Stream(a),
-) -> Step(a, Stream(a)) {
+) -> Step(a, Nil) {
   case stream_check_queue_bound(consumers, consumer_id, policy) {
     None -> {
       let current_active = case list.drop(consumers, consumer_id) {
@@ -1258,36 +1333,32 @@ fn stream_broadcast_commit(
       }
       let consumers = stream_enqueue_for_others(consumers, consumer_id, element)
       ref.set(
-        state_ref,
+        shared.state,
         BroadcastRunning(upstream: Some(rest), consumers:, policy:),
       )
       case current_active {
-        True -> Next(element, stream_broadcast_consumer(state_ref, consumer_id))
+        True -> Next(element, Nil)
         False -> Done
       }
     }
     Some(terminal) -> {
       // Keep the current consumer pending so cleanup can cancel it too.
       ref.set(
-        state_ref,
+        shared.state,
         BroadcastClosing(
           terminal:,
           pending: stream_broadcast_active_consumers(consumers),
         ),
       )
       close(rest)
-      case ref.get(state_ref) {
+      case ref.get(shared.state) {
         Ok(BroadcastClosing(terminal, pending)) ->
-          stream_broadcast_emit_terminal(
-            state_ref,
-            terminal,
-            pending,
-            consumer_id,
-          )
+          stream_broadcast_emit_terminal(shared, terminal, pending, consumer_id)
         Error(Nil)
         | Ok(BroadcastRunning(..))
         | Ok(BroadcastPulling(..))
-        | Ok(BroadcastFailed(..)) -> Done
+        | Ok(BroadcastFailed(..))
+        | Ok(BroadcastBroken(..)) -> Done
       }
     }
   }
@@ -1295,15 +1366,15 @@ fn stream_broadcast_commit(
 
 // Called only after cleanup returns, or for an already published failure.
 fn stream_broadcast_emit_terminal(
-  state_ref: Ref(BroadcastState(a)),
+  shared: Shared(a),
   terminal: a,
   pending: List(Int),
   consumer_id: Int,
-) -> Step(a, Stream(a)) {
+) -> Step(a, Nil) {
   let notify = list.contains(pending, consumer_id)
-  stream_broadcast_remove_pending(state_ref, terminal, pending, consumer_id)
+  stream_broadcast_remove_pending(shared, terminal, pending, consumer_id)
   case notify {
-    True -> Next(terminal, empty())
+    True -> Next(terminal, Nil)
     False -> Done
   }
 }
@@ -1320,30 +1391,34 @@ fn stream_broadcast_active_consumers(
 }
 
 fn stream_broadcast_remove_pending(
-  state_ref: Ref(BroadcastState(a)),
+  shared: Shared(a),
   terminal: a,
   pending: List(Int),
   consumer_id: Int,
 ) -> Nil {
   case list.filter(pending, fn(index) { index != consumer_id }) {
-    [] -> ref.delete(state_ref)
-    pending -> ref.set(state_ref, BroadcastFailed(terminal:, pending:))
+    [] -> ref.delete(shared.state)
+    pending -> ref.set(shared.state, BroadcastFailed(terminal:, pending:))
   }
 }
 
 // Marks a consumer as done, by `Done` or by `close`. The last one
 // closes the upstream if it is still open and deletes the shared state.
-fn stream_broadcast_finish(
-  state_ref: Ref(BroadcastState(a)),
-  consumer_id: Int,
-) -> Nil {
-  case ref.get(state_ref) {
+fn stream_broadcast_finish(shared: Shared(a), consumer_id: Int) -> Nil {
+  case ref.get(shared.state) {
     Error(Nil) -> Nil
     Ok(BroadcastFailed(terminal, pending)) ->
-      stream_broadcast_remove_pending(state_ref, terminal, pending, consumer_id)
+      stream_broadcast_remove_pending(shared, terminal, pending, consumer_id)
+    Ok(BroadcastBroken(consumers)) -> {
+      let consumers = stream_broadcast_cancel(consumers, consumer_id)
+      case list.any(consumers, fn(consumer) { consumer.active }) {
+        True -> ref.set(shared.state, BroadcastBroken(consumers:))
+        False -> ref.delete(shared.state)
+      }
+    }
     Ok(BroadcastClosing(terminal, pending)) ->
       ref.set(
-        state_ref,
+        shared.state,
         BroadcastClosing(
           terminal:,
           pending: list.filter(pending, fn(index) { index != consumer_id }),
@@ -1351,7 +1426,7 @@ fn stream_broadcast_finish(
       )
     Ok(BroadcastPulling(consumers, policy)) ->
       ref.set(
-        state_ref,
+        shared.state,
         BroadcastPulling(
           consumers: stream_broadcast_cancel(consumers, consumer_id),
           policy:,
@@ -1361,15 +1436,41 @@ fn stream_broadcast_finish(
       let consumers = stream_broadcast_cancel(consumers, consumer_id)
       case list.any(consumers, fn(consumer) { consumer.active }), upstream {
         True, _ ->
-          ref.set(state_ref, BroadcastRunning(upstream:, consumers:, policy:))
+          ref.set(
+            shared.state,
+            BroadcastRunning(upstream:, consumers:, policy:),
+          )
         False, Some(upstream) -> {
-          ref.delete(state_ref)
+          ref.delete(shared.state)
           close(upstream)
         }
-        False, None -> ref.delete(state_ref)
+        False, None -> ref.delete(shared.state)
       }
     }
   }
+}
+
+// The upstream raised during a pull. Consumers keep their queued values
+// and then raise, so a consumer's result is never cut short silently.
+fn stream_broadcast_abandon(shared: Shared(a)) -> Nil {
+  case ref.get(shared.state) {
+    Ok(BroadcastPulling(consumers, _)) ->
+      case list.any(consumers, fn(consumer) { consumer.active }) {
+        True -> ref.set(shared.state, BroadcastBroken(consumers:))
+        False -> ref.delete(shared.state)
+      }
+    Error(Nil)
+    | Ok(BroadcastRunning(..))
+    | Ok(BroadcastClosing(..))
+    | Ok(BroadcastFailed(..))
+    | Ok(BroadcastBroken(..)) -> Nil
+  }
+}
+
+fn stream_broadcast_raise_broken() -> Step(a, Nil) {
+  cleanup.raise(
+    "datastream: the upstream shared by these consumers raised while another consumer was reading it",
+  )
 }
 
 fn stream_broadcast_cancel(
@@ -1480,10 +1581,10 @@ fn stream_find_full_queue(
 ///
 /// On Erlang, consume both components in the process that called `unzip`.
 pub fn unzip(stream: Stream(#(a, b))) -> #(Stream(a), Stream(b)) {
-  let state_ref = stream_broadcast_state(stream, 2, Unlimited)
+  let shared = stream_broadcast_state(stream, 2, Unlimited)
   #(
-    map(over: stream_broadcast_consumer(state_ref, 0), with: fn(pair) { pair.0 }),
-    map(over: stream_broadcast_consumer(state_ref, 1), with: fn(pair) { pair.1 }),
+    map(over: stream_broadcast_member(shared, 0), with: fn(pair) { pair.0 }),
+    map(over: stream_broadcast_member(shared, 1), with: fn(pair) { pair.1 }),
   )
 }
 
@@ -1683,6 +1784,7 @@ pub fn count(stream: Stream(a)) -> Int {
 /// // Error(Nil)
 /// ```
 pub fn first(stream: Stream(a)) -> Result(a, Nil) {
+  use <- cleanup.guard
   case pull(stream) {
     Next(element, rest) -> {
       close(rest)
@@ -1707,10 +1809,14 @@ pub fn fold(
   from initial: b,
   with step: fn(b, a) -> b,
 ) -> b {
+  use <- cleanup.guard
+  terminal_fold(stream, initial, step)
+}
+
+fn terminal_fold(stream: Stream(a), accumulator: b, step: fn(b, a) -> b) -> b {
   case pull(stream) {
-    Next(element, rest) ->
-      fold(over: rest, from: step(initial, element), with: step)
-    Done -> initial
+    Next(element, rest) -> terminal_fold(rest, step(accumulator, element), step)
+    Done -> accumulator
   }
 }
 
@@ -1721,8 +1827,9 @@ pub fn reduce(
   over stream: Stream(a),
   with step: fn(a, a) -> a,
 ) -> Result(a, Nil) {
+  use <- cleanup.guard
   case pull(stream) {
-    Next(head, rest) -> Ok(fold(over: rest, from: head, with: step))
+    Next(head, rest) -> Ok(terminal_fold(rest, head, step))
     Done -> Error(Nil)
   }
 }
@@ -1731,8 +1838,13 @@ pub fn reduce(
 ///
 /// Run the source's callbacks through completion. The input must terminate.
 pub fn drain(stream: Stream(a)) -> Nil {
+  use <- cleanup.guard
+  terminal_drain(stream)
+}
+
+fn terminal_drain(stream: Stream(a)) -> Nil {
   case pull(stream) {
-    Next(_, rest) -> drain(rest)
+    Next(_, rest) -> terminal_drain(rest)
     Done -> Nil
   }
 }
@@ -1744,11 +1856,16 @@ pub fn all(
   over stream: Stream(a),
   satisfying predicate: fn(a) -> Bool,
 ) -> Bool {
+  use <- cleanup.guard
+  terminal_all(stream, predicate)
+}
+
+fn terminal_all(stream: Stream(a), predicate: fn(a) -> Bool) -> Bool {
   case pull(stream) {
     Done -> True
     Next(element, rest) ->
       case predicate(element) {
-        True -> all(over: rest, satisfying: predicate)
+        True -> terminal_all(rest, predicate)
         False -> {
           close(rest)
           False
@@ -1764,6 +1881,11 @@ pub fn any(
   over stream: Stream(a),
   satisfying predicate: fn(a) -> Bool,
 ) -> Bool {
+  use <- cleanup.guard
+  terminal_any(stream, predicate)
+}
+
+fn terminal_any(stream: Stream(a), predicate: fn(a) -> Bool) -> Bool {
   case pull(stream) {
     Done -> False
     Next(element, rest) ->
@@ -1772,7 +1894,7 @@ pub fn any(
           close(rest)
           True
         }
-        False -> any(over: rest, satisfying: predicate)
+        False -> terminal_any(rest, predicate)
       }
   }
 }
@@ -1784,6 +1906,14 @@ pub fn find(
   over stream: Stream(a),
   satisfying predicate: fn(a) -> Bool,
 ) -> Result(a, Nil) {
+  use <- cleanup.guard
+  terminal_find(stream, predicate)
+}
+
+fn terminal_find(
+  stream: Stream(a),
+  predicate: fn(a) -> Bool,
+) -> Result(a, Nil) {
   case pull(stream) {
     Done -> Error(Nil)
     Next(element, rest) ->
@@ -1792,7 +1922,7 @@ pub fn find(
           close(rest)
           Ok(element)
         }
-        False -> find(over: rest, satisfying: predicate)
+        False -> terminal_find(rest, predicate)
       }
   }
 }
@@ -1822,6 +1952,7 @@ pub fn product_int(stream: Stream(Int)) -> Int {
 ///
 /// On an error, close the remaining stream and return that error. Empty input returns `Ok([])`. Use `partition_result` to keep errors and continue.
 pub fn collect_result(stream: Stream(Result(a, e))) -> Result(List(a), e) {
+  use <- cleanup.guard
   terminal_do_collect_result(stream, [])
 }
 
@@ -1877,11 +2008,16 @@ pub fn partition_map(
 ///
 /// The input must terminate for this call to return.
 pub fn each(over stream: Stream(a), with effect: fn(a) -> Nil) -> Nil {
+  use <- cleanup.guard
+  terminal_each(stream, effect)
+}
+
+fn terminal_each(stream: Stream(a), effect: fn(a) -> Nil) -> Nil {
   case pull(stream) {
     Done -> Nil
     Next(element, rest) -> {
       effect(element)
-      each(over: rest, with: effect)
+      terminal_each(rest, effect)
     }
   }
 }
@@ -1893,11 +2029,19 @@ pub fn try_each(
   over stream: Stream(a),
   with effect: fn(a) -> Result(Nil, e),
 ) -> Result(Nil, e) {
+  use <- cleanup.guard
+  terminal_try_each(stream, effect)
+}
+
+fn terminal_try_each(
+  stream: Stream(a),
+  effect: fn(a) -> Result(Nil, e),
+) -> Result(Nil, e) {
   case pull(stream) {
     Done -> Ok(Nil)
     Next(element, rest) ->
       case effect(element) {
-        Ok(Nil) -> try_each(over: rest, with: effect)
+        Ok(Nil) -> terminal_try_each(rest, effect)
         Error(e) -> {
           close(rest)
           Error(e)
@@ -2129,7 +2273,7 @@ fn text_finish_records(
 
 /// Split string chunks on a delimiter, joining pieces that cross chunk boundaries.
 ///
-/// For a nonempty delimiter, preserve empty pieces before, between, and after delimiters. A source with no elements emits no pieces; a source containing an empty string emits one empty piece.
+/// For a nonempty delimiter, preserve empty pieces before, between, and after delimiters. Match the delimiter by code points on both targets, so `"e"` matches the `e` of `e` followed by U+0301 and `"\r"` matches the CR of CRLF. A source with no elements emits no pieces; a source containing an empty string emits one empty piece.
 ///
 /// An empty delimiter emits Unicode grapheme clusters. Hold a chunk's final grapheme until the next chunk or end of input establishes its boundary. Memory use depends on the longest unfinished piece or grapheme.
 pub fn split(
@@ -2179,7 +2323,7 @@ fn text_split_pull(state: Split) -> Step(String, Stream(String)) {
     chunk -> [chunk, ..state.recent]
   }
   let window = text_reverse_concat(chunks)
-  case string.split_once(window, on: state.delimiter) {
+  case text_split_once(window, state.delimiter) {
     Ok(#(before, after)) ->
       Next(
         text_reverse_concat([before, ..state.piece]),
@@ -2263,13 +2407,54 @@ fn text_graphemes_pull(
               }
             Next(chunk, source_rest) -> {
               let #(complete, new_tail) =
-                text_split_last(string.to_graphemes(tail <> chunk))
+                text_extend_grapheme(tail, chunk, context: 64)
               text_graphemes_pull(source_rest, complete, new_tail, False)
             }
           }
       }
   }
 }
+
+// Segment `tail <> chunk`, where `tail` is the unfinished last grapheme.
+// Resegmenting a long `tail` for every small chunk is quadratic, so first
+// segment only a suffix of it. Grapheme rules that join two code points
+// look back at a bounded pattern, or count regional indicators, which the
+// suffix starts before. So if the chunk adds no boundary after the suffix,
+// it adds none after the whole tail. Otherwise retry with a longer suffix;
+// the whole tail is segmented once its grapheme is complete.
+fn text_extend_grapheme(
+  tail: String,
+  chunk: String,
+  context size: Int,
+) -> #(List(String), String) {
+  case chunk, text_suffix(tail, size) {
+    "", _ -> #([], tail)
+    _, #(False, _) -> text_split_last(string.to_graphemes(tail <> chunk))
+    _, #(True, suffix) ->
+      case
+        list.length(string.to_graphemes(suffix <> chunk))
+        == list.length(string.to_graphemes(suffix))
+      {
+        True -> #([], tail <> chunk)
+        False -> text_extend_grapheme(tail, chunk, context: size * 2)
+      }
+  }
+}
+
+// The first occurrence of `delimiter`, matched by code points on both
+// targets. `string.split_once` matches whole grapheme clusters on Erlang.
+@external(erlang, "datastream_text_ffi", "split_once")
+@external(javascript, "./datastream/internal/text_ffi.mjs", "split_once")
+fn text_split_once(
+  text: String,
+  delimiter: String,
+) -> Result(#(String, String), Nil)
+
+// About the last `size` bytes (code units on JavaScript) of `text`, and
+// whether that is shorter than `text`.
+@external(erlang, "datastream_text_ffi", "suffix")
+@external(javascript, "./datastream/internal/text_ffi.mjs", "suffix")
+fn text_suffix(text: String, size: Int) -> #(Bool, String)
 
 /// Split off the last element; an empty list yields `#([], "")`.
 fn text_split_last(graphemes: List(String)) -> #(List(String), String) {
@@ -3151,7 +3336,7 @@ pub fn interval(every milliseconds: Int) -> Result(Stream(Nil), ArgumentError) {
 ///
 /// Emit `Ok(element)` for each timely result. On a deadline, emit one `Error(Nil)` and end. Pull the source in one worker for the whole run, starting on the first pull. Early termination or timeout asks that worker to stop; cleanup waits for any pull callback in progress to return, without blocking the caller for it.
 ///
-/// The source must support consumption in a worker process. A subject stream or shared broadcast consumer tied to the caller cannot be used directly. Worker failures propagate as exceptions after attempted cleanup.
+/// The source must support consumption in a worker process. A subject stream or shared broadcast consumer tied to the caller cannot be used directly. A source that raises is closed in the worker, and the exception is re-raised in the consumer.
 pub fn timeout(
   over stream: Stream(a),
   within milliseconds: Int,
@@ -3768,6 +3953,7 @@ type MapRun(a, b) {
     source_drained: Bool,
     mailbox: Mailbox(#(Int, b)),
     reaper: Pid,
+    cell: cleanup.Cell,
     running: Dict(Int, #(Pid, Monitor)),
     watching: Dict(Monitor, Int),
     finished: Dict(Int, b),
@@ -3841,12 +4027,21 @@ fn parallel_map_stream(
 ) -> Stream(b) {
   make(
     pull: fn() {
+      let mailbox = pump_new_mailbox()
+      let reaper = pump_start_reaper()
+      // Stopping the reaper kills every task linked to it.
+      let cell =
+        cleanup.new(fn() {
+          pump_stop_reaper(reaper)
+          pump_close_mailbox(mailbox)
+        })
       parallel_map_step(MapRun(
         settings:,
         source: stream,
         source_drained: False,
-        mailbox: pump_new_mailbox(),
-        reaper: pump_start_reaper(),
+        mailbox:,
+        reaper:,
+        cell:,
         running: dict.new(),
         watching: dict.new(),
         finished: dict.new(),
@@ -3878,6 +4073,12 @@ fn parallel_map_abort(run: MapRun(a, b)) -> Nil {
 @target(erlang)
 /// Kill the busy workers and drop whatever they still send.
 fn parallel_stop_tasks(run: MapRun(a, b)) -> Nil {
+  cleanup.discard(run.cell)
+  parallel_kill_tasks(run)
+}
+
+@target(erlang)
+fn parallel_kill_tasks(run: MapRun(a, b)) -> Nil {
   let Nil =
     dict.each(run.running, fn(_, worker) {
       let #(pid, monitor) = worker
@@ -3890,6 +4091,7 @@ fn parallel_stop_tasks(run: MapRun(a, b)) -> Nil {
 
 @target(erlang)
 fn parallel_map_step(run: MapRun(a, b)) -> Step(b, Stream(b)) {
+  cleanup.touch(run.cell)
   let run = parallel_map_dispatch(run)
   case dict.get(run.finished, run.next_emit_index), dict.is_empty(run.running) {
     Ok(value), _ ->
@@ -3955,12 +4157,9 @@ fn parallel_map_dispatch(run: MapRun(a, b)) -> MapRun(a, b) {
   {
     True -> run
     False ->
-      // A panicking upstream must not leave the busy workers running.
-      case
-        pump_guard(fn() { pull(run.source) }, on_crash: fn() {
-          parallel_stop_tasks(run)
-        })
-      {
+      // If the upstream raises, the enclosing terminal's cleanup stops
+      // the workers through `run.cell`.
+      case pull(run.source) {
         Done -> MapRun(..run, source_drained: True)
         Next(element, rest) -> {
           let index = run.next_dispatch_index
@@ -3972,15 +4171,17 @@ fn parallel_map_dispatch(run: MapRun(a, b)) -> MapRun(a, b) {
               linked_to: run.reaper,
               running: fn() { function(element) },
             )
-          parallel_map_dispatch(
+          let run =
             MapRun(
               ..run,
               source: rest,
               running: dict.insert(run.running, index, #(pid, monitor)),
               watching: dict.insert(run.watching, monitor, index),
               next_dispatch_index: index + 1,
-            ),
-          )
+            )
+          // Cleanup after a raise must also drop the new task's monitor.
+          cleanup.set(run.cell, fn() { parallel_kill_tasks(run) })
+          parallel_map_dispatch(run)
         }
       }
   }
@@ -4028,6 +4229,7 @@ pub fn each_unordered(
 type MergeRun(a) {
   MergeRun(
     mailbox: Mailbox(#(Int, Reply(a))),
+    cell: cleanup.Cell,
     workers: Dict(Int, Worker),
     watching: Dict(Monitor, Int),
     waiting_front: List(Int),
@@ -4067,10 +4269,12 @@ fn parallel_start_merge(
     })
   let #(started, waiting) = list.split(workers, max_buffer)
   list.each(started, fn(entry) { pump_request(entry.1) })
+  let workers = dict.from_list(workers)
   MergeRun(
     mailbox:,
-    workers: dict.from_list(workers),
-    watching: parallel_watch_all(workers),
+    cell: parallel_stop_cell(workers, mailbox),
+    workers:,
+    watching: parallel_watch_all(dict.to_list(workers)),
     waiting_front: list.map(waiting, fn(entry) { entry.0 }),
     waiting_back: [],
     last_emitted: None,
@@ -4087,16 +4291,42 @@ fn parallel_watch_all(workers: List(#(Int, Worker))) -> Dict(Monitor, Int) {
 @target(erlang)
 fn parallel_merge_active(run: MergeRun(a)) -> Stream(a) {
   make(pull: fn() { parallel_merge_step(run) }, close: fn() {
-    parallel_stop_all(run.workers, run.mailbox)
+    parallel_stop_all(run.cell, run.workers, run.mailbox)
   })
 }
 
 @target(erlang)
+/// A cell that stops every worker of a run and closes its mailbox.
+/// Stopping a worker that has already finished does nothing.
+fn parallel_stop_cell(
+  workers: Dict(Int, Worker),
+  mailbox: Mailbox(message),
+) -> cleanup.Cell {
+  cleanup.new(fn() { parallel_stop_workers(workers, mailbox) })
+}
+
+@target(erlang)
 fn parallel_stop_all(
+  cell: cleanup.Cell,
+  workers: Dict(Int, Worker),
+  mailbox: Mailbox(message),
+) -> Nil {
+  cleanup.take(cell, or: fn() { parallel_stop_workers(workers, mailbox) })
+}
+
+@target(erlang)
+fn parallel_stop_workers(
   workers: Dict(Int, Worker),
   mailbox: Mailbox(message),
 ) -> Nil {
   let Nil = dict.each(workers, fn(_, worker) { pump_stop(worker) })
+  pump_close_mailbox(mailbox)
+}
+
+@target(erlang)
+/// End a run whose workers have all finished.
+fn parallel_finish(cell: cleanup.Cell, mailbox: Mailbox(message)) -> Nil {
+  cleanup.discard(cell)
   pump_close_mailbox(mailbox)
 }
 
@@ -4113,9 +4343,10 @@ fn parallel_merge_step(run: MergeRun(a)) -> Step(a, Stream(a)) {
       )
     None -> run
   }
+  cleanup.touch(run.cell)
   case dict.is_empty(run.workers) {
     True -> {
-      pump_close_mailbox(run.mailbox)
+      parallel_finish(run.cell, run.mailbox)
       Done
     }
     False ->
@@ -4130,7 +4361,7 @@ fn parallel_merge_step(run: MergeRun(a)) -> Step(a, Stream(a)) {
             parallel_request_next(parallel_merge_forget(run, index)),
           )
         WorkerDown(reason:, ..) -> {
-          parallel_stop_all(run.workers, run.mailbox)
+          parallel_stop_all(run.cell, run.workers, run.mailbox)
           pump_raise_worker_crash("datastream.merge", reason)
         }
         TimedOut -> parallel_merge_step(run)
@@ -4180,12 +4411,14 @@ type RaceState(a) {
   /// sources that have not ended.
   RaceWaiting(
     mailbox: Mailbox(#(Int, Reply(a))),
+    cell: cleanup.Cell,
     workers: Dict(Int, Worker),
     watching: Dict(Monitor, Int),
   )
   /// Source `index` won and is the only one still pulled.
   RaceWinning(
     mailbox: Mailbox(#(Int, Reply(a))),
+    cell: cleanup.Cell,
     index: Int,
     winner: Worker,
     watching: Dict(Monitor, Int),
@@ -4218,10 +4451,13 @@ fn parallel_start_race(streams: List(Stream(a))) -> RaceState(a) {
       pump_request(worker)
       #(index, worker)
     })
+  let watching = parallel_watch_all(workers)
+  let workers = dict.from_list(workers)
   RaceWaiting(
     mailbox:,
-    workers: dict.from_list(workers),
-    watching: parallel_watch_all(workers),
+    cell: parallel_stop_cell(workers, mailbox),
+    workers:,
+    watching:,
   )
 }
 
@@ -4229,29 +4465,29 @@ fn parallel_start_race(streams: List(Stream(a))) -> RaceState(a) {
 fn parallel_race_active(state: RaceState(a)) -> Stream(a) {
   make(pull: fn() { parallel_race_step(state) }, close: fn() {
     case state {
-      RaceWaiting(mailbox:, workers:, ..) -> parallel_stop_all(workers, mailbox)
-      RaceWinning(mailbox:, winner:, ..) -> {
-        pump_stop(winner)
-        pump_close_mailbox(mailbox)
-      }
+      RaceWaiting(mailbox:, cell:, workers:, ..) ->
+        parallel_stop_all(cell, workers, mailbox)
+      RaceWinning(mailbox:, cell:, winner:, ..) ->
+        parallel_stop_all(cell, dict.from_list([#(0, winner)]), mailbox)
     }
   })
 }
 
 @target(erlang)
 fn parallel_race_step(state: RaceState(a)) -> Step(a, Stream(a)) {
+  cleanup.touch(state.cell)
   case state {
-    RaceWaiting(mailbox:, workers:, watching:) ->
+    RaceWaiting(mailbox:, cell:, workers:, watching:) ->
       case dict.is_empty(workers) {
         True -> {
-          pump_close_mailbox(mailbox)
+          parallel_finish(cell, mailbox)
           Done
         }
-        False -> parallel_race_wait(mailbox, workers, watching)
+        False -> parallel_race_wait(mailbox, cell, workers, watching)
       }
-    RaceWinning(mailbox:, index:, winner:, watching:) -> {
+    RaceWinning(mailbox:, cell:, index:, winner:, watching:) -> {
       pump_request(winner)
-      parallel_race_follow(mailbox, index, winner, watching)
+      parallel_race_follow(mailbox, cell, index, winner, watching)
     }
   }
 }
@@ -4259,6 +4495,7 @@ fn parallel_race_step(state: RaceState(a)) -> Step(a, Stream(a)) {
 @target(erlang)
 fn parallel_race_wait(
   mailbox: Mailbox(#(Int, Reply(a))),
+  cell: cleanup.Cell,
   workers: Dict(Int, Worker),
   watching: Dict(Monitor, Int),
 ) -> Step(a, Stream(a)) {
@@ -4275,6 +4512,7 @@ fn parallel_race_wait(
             element,
             parallel_race_active(RaceWinning(
               mailbox:,
+              cell:,
               index:,
               winner:,
               watching: dict.from_list([#(pump_monitor_of(winner), index)]),
@@ -4283,6 +4521,7 @@ fn parallel_race_wait(
         Error(_) ->
           parallel_race_step(RaceWaiting(
             mailbox:,
+            cell:,
             workers: dict.new(),
             watching: dict.new(),
           ))
@@ -4295,21 +4534,23 @@ fn parallel_race_wait(
       }
       parallel_race_step(RaceWaiting(
         mailbox:,
+        cell:,
         workers: dict.delete(workers, index),
         watching:,
       ))
     }
     WorkerDown(reason:, ..) -> {
-      parallel_stop_all(workers, mailbox)
+      parallel_stop_all(cell, workers, mailbox)
       pump_raise_worker_crash("datastream.race", reason)
     }
-    TimedOut -> parallel_race_wait(mailbox, workers, watching)
+    TimedOut -> parallel_race_wait(mailbox, cell, workers, watching)
   }
 }
 
 @target(erlang)
 fn parallel_race_follow(
   mailbox: Mailbox(#(Int, Reply(a))),
+  cell: cleanup.Cell,
   index: Int,
   winner: Worker,
   watching: Dict(Monitor, Int),
@@ -4319,22 +4560,28 @@ fn parallel_race_follow(
     Received(#(from, Element(_)))
       | Received(#(from, Exhausted))
       if from != index
-    -> parallel_race_follow(mailbox, index, winner, watching)
+    -> parallel_race_follow(mailbox, cell, index, winner, watching)
     Received(#(_, Element(element))) ->
       Next(
         element,
-        parallel_race_active(RaceWinning(mailbox:, index:, winner:, watching:)),
+        parallel_race_active(RaceWinning(
+          mailbox:,
+          cell:,
+          index:,
+          winner:,
+          watching:,
+        )),
       )
     Received(#(_, Exhausted)) -> {
       pump_forget(winner)
-      pump_close_mailbox(mailbox)
+      parallel_finish(cell, mailbox)
       Done
     }
     WorkerDown(reason:, ..) -> {
-      pump_close_mailbox(mailbox)
+      parallel_finish(cell, mailbox)
       pump_raise_worker_crash("datastream.race", reason)
     }
-    TimedOut -> parallel_race_follow(mailbox, index, winner, watching)
+    TimedOut -> parallel_race_follow(mailbox, cell, index, winner, watching)
   }
 }
 
@@ -4430,6 +4677,8 @@ fn pump_spawn_pump(
         process.new_selector()
         |> process.select(control)
         |> process.select_specific_monitor(consumer_monitor, fn(_) { Stop })
+      // A raising source closes what it opened before the worker exits.
+      use <- cleanup.guard
       pump_pump_loop(stream, mailbox, id, selector)
     })
   let monitor = process.monitor(pid)
@@ -4493,12 +4742,6 @@ fn pump_start_reaper() -> Pid
 fn pump_stop_reaper(reaper: Pid) -> Nil
 
 @target(erlang)
-/// Run `body`; if it panics or throws, run `on_crash` first and then let
-/// the same error continue.
-@external(erlang, "datastream_mailbox_ffi", "guard")
-fn pump_guard(body: fn() -> a, on_crash on_crash: fn() -> Nil) -> a
-
-@target(erlang)
 /// Run `work` in a new monitored process that sends `#(id, result)` to
 /// `mailbox`. The process links to `reaper`, so it is killed when the
 /// consumer exits even while `work` is still running.
@@ -4525,6 +4768,7 @@ type Pump(a) {
   Pump(
     worker: Worker,
     mailbox: Mailbox(#(Nil, Reply(a))),
+    cell: cleanup.Cell,
     watching: Dict(Monitor, Nil),
     requested: Bool,
     context: String,
@@ -4546,8 +4790,13 @@ fn pump_on_first_pull(
       let mailbox = pump_new_mailbox()
       let worker = pump_spawn_pump(over: stream, into: mailbox, tagged: Nil)
       let watching = dict.from_list([#(worker.monitor, Nil)])
+      let cell =
+        cleanup.new(fn() {
+          pump_stop(worker)
+          pump_close_mailbox(mailbox)
+        })
       begin(
-        Pump(worker:, mailbox:, watching:, requested: False, context:),
+        Pump(worker:, mailbox:, cell:, watching:, requested: False, context:),
         pump_now_milliseconds(),
       )
     },
@@ -4592,6 +4841,7 @@ fn pump_next_forever(pump: Pump(a)) -> #(Pump(a), Reply(a)) {
 
 @target(erlang)
 fn pump_ensure_requested(pump: Pump(a)) -> Pump(a) {
+  cleanup.touch(pump.cell)
   case pump.requested {
     True -> pump
     False -> {
@@ -4609,6 +4859,7 @@ fn pump_handle_event(
   case event {
     Received(#(_, Exhausted)) -> {
       pump_forget(pump.worker)
+      cleanup.discard(pump.cell)
       pump_close_mailbox(pump.mailbox)
       #(pump, Ok(Exhausted))
     }
@@ -4618,6 +4869,7 @@ fn pump_handle_event(
     )
     TimedOut -> #(pump, Error(Nil))
     WorkerDown(reason:, ..) -> {
+      cleanup.discard(pump.cell)
       pump_close_mailbox(pump.mailbox)
       pump_raise_worker_crash(pump.context, reason)
     }
@@ -4628,8 +4880,10 @@ fn pump_handle_event(
 /// Stop a pump that has not replied `Exhausted`: it closes its upstream
 /// once any pull in progress returns.
 fn pump_stop_pump(pump: Pump(a)) -> Nil {
-  pump_stop(pump.worker)
-  pump_close_mailbox(pump.mailbox)
+  cleanup.take(pump.cell, or: fn() {
+    pump_stop(pump.worker)
+    pump_close_mailbox(pump.mailbox)
+  })
 }
 
 // --- clock --------------------------------------------------------------------
@@ -4671,25 +4925,30 @@ fn async_make_async_iterable(
 ///
 /// Available on JavaScript only. With callbacks that return normally, each `next()` performs a synchronous pull and returns a promise. The returned iterator is single-use.
 ///
-/// Exhaustion closes a resource through its normal completion path. `return()`, a loop's `break`, and `throw()` close the remaining stream once when callbacks return normally. Cleanup after a callback exception is best-effort. See the [JavaScript guide](javascript.html) for an executable host example.
+/// Exhaustion closes a resource through its normal completion path. `return()`, a loop's `break`, and `throw()` close the remaining stream once. If a callback raises during `next()`, resources the iterator opened close once at their latest state before the promise rejects. See the [JavaScript guide](javascript.html) for an executable host example.
 ///
 /// If a source callback calls `return()`, the in-flight `next()` finishes with `done: true` and closes the latest continuation when the callback returns. A nested `next()` during a pull returns a promise rejected with `TypeError`, leaving the outer pull active.
 pub fn to_async_iterable(stream: Stream(a)) -> AsyncIterable(a) {
   let state = ref.new(Open(stream))
+  // Resources opened by any pull stay registered here until they close.
+  let frame = cleanup.new_frame()
   async_make_async_iterable(
-    fn() { async_pull_next(state) },
+    fn() { async_pull_next(state, frame) },
     fn() { async_stop(state) },
     fn() { async_fail(state) },
   )
 }
 
 @target(javascript)
-fn async_pull_next(state: Ref(PullState(a))) -> Result(a, Nil) {
+fn async_pull_next(
+  state: Ref(PullState(a)),
+  frame: cleanup.Frame,
+) -> Result(a, Nil) {
   case ref.get(state) {
     Error(_) | Ok(Closed) | Ok(Pulling(_)) | Ok(Stopping(_)) -> Error(Nil)
     Ok(Open(stream)) -> {
       ref.set(state, Pulling(stream))
-      let step = pull(stream)
+      let step = cleanup.guard_in(frame, fn() { pull(stream) }, noop)
       case step, ref.get(state) {
         Done, _ -> {
           ref.set(state, Closed)

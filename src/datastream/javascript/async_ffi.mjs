@@ -40,19 +40,34 @@ export function make_async_iterable(next, stop, failed) {
         return Promise.resolve(done_result());
       } catch (error) {
         finished = true;
-        failed();
+        try {
+          failed();
+        } catch (_) {
+          // The callback's exception is the one reported.
+        }
         return Promise.reject(error);
       } finally {
         pulling = false;
       }
     },
 
+    // Async iterator methods report failures through their promise. An
+    // exception from `close` rejects `return()`; `throw(error)` always
+    // rejects with the error it was given.
     return() {
-      return Promise.resolve(finish());
+      try {
+        return Promise.resolve(finish());
+      } catch (error) {
+        return Promise.reject(error);
+      }
     },
 
     throw(error) {
-      finish();
+      try {
+        finish();
+      } catch (_) {
+        // The supplied error is the one reported.
+      }
       return Promise.reject(error);
     },
   };

@@ -8,7 +8,7 @@
 
 -module(datastream_mailbox_ffi).
 -export([new/0, send/2, receive_event/3, receive_event_forever/2, close/1,
-         raise_worker_crash/2, start_reaper/0, stop_reaper/1, guard/2]).
+         raise_worker_crash/2, start_reaper/0, stop_reaper/1]).
 
 new() ->
     erlang:alias().
@@ -86,11 +86,3 @@ reaper_loop(Monitor) ->
 stop_reaper(Reaper) ->
     Reaper ! stop,
     nil.
-
-%% Runs `Body`; if it raises, runs `OnCrash` and re-raises unchanged.
-guard(Body, OnCrash) ->
-    try Body()
-    catch Class:Reason:Stacktrace ->
-        OnCrash(),
-        erlang:raise(Class, Reason, Stacktrace)
-    end.

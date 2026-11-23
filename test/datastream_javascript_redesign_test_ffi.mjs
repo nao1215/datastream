@@ -67,3 +67,58 @@ export async function assert_unstarted_return(iterable, history) {
   equal(await iterator.return(), { done: true }, "unstarted return");
   await remains_done(iterator, history, []);
 }
+
+// `raising` throws while the stream produces the element at index `at`.
+export async function assert_callback_raise(iterable, history, at, gleam_expected) {
+  const expected = Array.from(gleam_expected);
+  const iterator = iterable[Symbol.asyncIterator]();
+  for (let index = 0; index < at; index++) {
+    equal(await iterator.next(), { done: false, value: index }, `next ${index}`);
+  }
+  let rejected = false;
+  try {
+    await iterator.next();
+  } catch (_) {
+    rejected = true;
+  }
+  if (!rejected) throw new Error("a raising callback must reject next()");
+  equal(Array.from(history()), expected, "history after callback raise");
+  await remains_done(iterator, history, expected);
+}
+
+// The resource's close throws. Iterator methods must still return
+// promises, and `throw(error)` must reject with the supplied error.
+export async function assert_close_error(make) {
+  const returned = make()[Symbol.asyncIterator]();
+  equal(await returned.next(), { done: false, value: 0 }, "next before return");
+  let promise;
+  try {
+    promise = returned.return();
+  } catch (_) {
+    throw new Error("return() must not throw synchronously");
+  }
+  let rejected = false;
+  try {
+    await promise;
+  } catch (_) {
+    rejected = true;
+  }
+  if (!rejected) throw new Error("return() must reject when close throws");
+  equal(await returned.next(), { done: true }, "next after failed return");
+
+  const thrown = make()[Symbol.asyncIterator]();
+  equal(await thrown.next(), { done: false, value: 0 }, "next before throw");
+  const failure = new Error("consumer failure");
+  try {
+    promise = thrown.throw(failure);
+  } catch (_) {
+    throw new Error("throw() must not throw synchronously");
+  }
+  let reason;
+  try {
+    await promise;
+  } catch (error) {
+    reason = error;
+  }
+  if (reason !== failure) throw new Error("throw() must reject with the supplied error");
+}

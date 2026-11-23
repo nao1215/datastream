@@ -4,7 +4,7 @@
 
 ## Examples and unit tests
 
-Tests under `test/datastream/` cover element order, resource cleanup on completion and early termination, typed argument errors, and boundary values such as `fixed_size(size: 1)`, `chunks_of(into: 1)`, and a frame of exactly `max_frame_size`. Resource tests record opening, pulls, and the state passed to close. Cleanup after a user callback raises is best-effort; those exceptions do not have a close-exactly-once guarantee. `volume_test.gleam` pulls long streams to catch stack growth and quadratic buffering. The pipelines linked from the README run as tests in `test/examples/`.
+Tests under `test/datastream/` cover element order, resource cleanup on completion and early termination, typed argument errors, and boundary values such as `fixed_size(size: 1)`, `chunks_of(into: 1)`, and a frame of exactly `max_frame_size`. Resource tests record opening, pulls, and the state passed to close. `volume_test.gleam` pulls long streams to catch stack growth and quadratic buffering. The pipelines linked from the README run as tests in `test/examples/`.
 
 `datastream_redesign_test.gleam` checks whole-chunk binary alignment rejection, fail-fast cleanup, bounded broadcast overflow, and consumer cancellation. The Erlang redesign tests coordinate workers with explicit gates to verify parallel ordering and completion. The JavaScript redesign tests run host `for await` loops and check `break`, `throw`, and repeated iterator closure against resource event logs.
 
@@ -16,7 +16,11 @@ Tests under `test/datastream/` cover element order, resource cleanup on completi
 
 `test/datastream_chunking_test.gleam` checks the parsers whose exact output for a random input cannot be written down without re-implementing them: `lines`, `records`, `split` (one character, several characters, graphemes), `utf8_decode`, `bytes`, `delimited` (one and two bytes), `fixed_size` and `length_prefixed` (one- and two-byte prefixes). The same input is fed once as a single chunk, once cut at random places and once with empty chunks between the pieces; every run must yield the same elements, except for UTF-8 decoding. That check compares concatenated valid text and error counts because decoded string boundaries may vary. The text generator mixes every line terminator, the delimiters, a multi-byte character, an emoji and a combining accent, so cuts land inside `\r\n` and between a letter and its accent.
 
-This relation found two bugs: `split(on: "")` split a grapheme that spanned two chunks, and `utf8_decode` turned the valid text around an encoded surrogate or overlong sequence into one error. One limitation is left out on purpose: on Erlang a delimiter followed by a combining mark (`",\u{0301}"`) is one grapheme, so `split(on: ",")` does not split there inside one chunk but does at a chunk boundary.
+This relation found three bugs: `split(on: "")` split a grapheme that spanned two chunks, `utf8_decode` turned the valid text around an encoded surrogate or overlong sequence into one error, and on Erlang `split(on: ",")` matched whole graphemes, so a delimiter followed by a combining mark was split only when a chunk boundary fell between them. `test/text_chunking_test.gleam` compares `split` with a code point oracle and checks that a grapheme of 30,000 code points delivered one code point per chunk is segmented in linear time.
+
+## Cleanup when a callback raises
+
+`test/exception_cleanup_test.gleam` raises from `map`, terminal callbacks, resource callbacks, and `close` itself, and checks that every opened resource is closed exactly once at its latest state. A generator builds 600 random pipelines from resources, combinators, `broadcast`, and terminals, with and without a raising stage. `test/exception_cleanup_erlang_test.gleam` checks that workers started by `merge`, `race`, `timeout`, and `map_ordered` stop and close their sources when the consumer raises, and that a source raising inside a worker is closed before the worker exits.
 
 ## Nightly runs
 

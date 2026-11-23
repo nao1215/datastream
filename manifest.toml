@@ -8,7 +8,7 @@
 
 packages = [
   { name = "argv", version = "1.1.0", build_tools = ["gleam"], requirements = [], otp_app = "argv", source = "hex", outer_checksum = "3277D100448BDB4A29B6D58C0F36F631CBC349E8BDD09766C6309DF202831140" },
-  { name = "dataprep", version = "0.25.0", build_tools = ["gleam"], requirements = ["gleam_regexp", "gleam_stdlib"], otp_app = "dataprep", source = "hex", outer_checksum = "B6F85CD51DF4995FADF63DC32EE088F2BC7F489CE71FA090AB44EFBA96BBDE32" },
+  { name = "dataprep", version = "0.27.0", build_tools = ["gleam"], requirements = ["gleam_regexp", "gleam_stdlib", "non_empty_list"], otp_app = "dataprep", source = "hex", outer_checksum = "585F80B25A4A608BF93D58CF8B35A0FB5AA90EB6B94EDC690A31226C26CD9302" },
   { name = "filepath", version = "1.1.2", build_tools = ["gleam"], requirements = ["gleam_stdlib"], otp_app = "filepath", source = "hex", outer_checksum = "B06A9AF0BF10E51401D64B98E4B627F1D2E48C154967DA7AF4D0914780A6D40A" },
   { name = "glance", version = "7.0.0", build_tools = ["gleam"], requirements = ["gleam_stdlib", "glexer"], otp_app = "glance", source = "hex", outer_checksum = "EA52986965408D43003A1760E41457493EB96098DE193E6AD8646930EC190CB9" },
   { name = "gleam_erlang", version = "1.3.0", build_tools = ["gleam"], requirements = ["gleam_stdlib"], otp_app = "gleam_erlang", source = "hex", outer_checksum = "1124AD3AA21143E5AF0FC5CF3D9529F6DB8CA03E43A55711B60B6B7B3874375C" },
@@ -20,15 +20,17 @@ packages = [
   { name = "glexer", version = "2.5.0", build_tools = ["gleam"], requirements = ["gleam_stdlib", "splitter"], otp_app = "glexer", source = "hex", outer_checksum = "D423CF63B8D4F9654EF53D0AF4904B249EB0679BD41C63440170AC508C9CC65E" },
   { name = "glinter", version = "2.19.2", build_tools = ["gleam"], requirements = ["argv", "glance", "gleam_json", "gleam_stdlib", "simplifile", "tom"], otp_app = "glinter", source = "hex", outer_checksum = "19CBB4D78E58E54D6B0E8554C389DC01071334FB11E9140C9487C9A4BBCA6158" },
   { name = "metamon", version = "0.13.0", build_tools = ["gleam"], requirements = ["gleam_json", "gleam_stdlib", "simplifile"], otp_app = "metamon", source = "hex", outer_checksum = "C39B1D8987586A3A9D05457976095640E43D8A0D0D155DCD604D3375EE50EF27" },
+  { name = "non_empty_list", version = "2.3.0", build_tools = ["gleam"], requirements = ["gleam_stdlib"], otp_app = "non_empty_list", source = "hex", outer_checksum = "06F9D3AC751CF7853AD5D24B8139CEB30E42D8799DE8D49F966A6197DF0B01CC" },
   { name = "simplifile", version = "2.7.0", build_tools = ["gleam"], requirements = ["filepath", "gleam_stdlib"], otp_app = "simplifile", source = "hex", outer_checksum = "A2727627B063E87351934C7F7F008F2D1FDB16F6DE0B8C79F9E46459CFC9C164" },
   { name = "splitter", version = "1.3.0", build_tools = ["gleam"], requirements = ["gleam_stdlib"], otp_app = "splitter", source = "hex", outer_checksum = "8F1485306E0D59168A39E12ED8844F9F616EC59C3C63AFCFDAE04DBD68690CBC" },
   { name = "tom", version = "2.1.0", build_tools = ["gleam"], requirements = ["gleam_stdlib", "gleam_time"], otp_app = "tom", source = "hex", outer_checksum = "DCF04CB7AB35D58CFC598C66EA2E1816D160759802C89B2BA6238780D59BC256" },
 ]
 
 [requirements]
-dataprep = { version = ">= 0.9.0 and < 1.0.0" }
+dataprep = { version = ">= 0.27.0 and < 1.0.0" }
 gleam_erlang = { version = ">= 1.3.0 and < 2.0.0" }
 gleam_stdlib = { version = ">= 0.44.0 and < 2.0.0" }
 gleeunit = { version = ">= 1.0.0 and < 2.0.0" }
 glinter = { version = ">= 2.14.0 and < 3.0.0" }
 metamon = { version = ">= 0.5.0 and < 1.0.0" }
+non_empty_list = { version = ">= 2.3.0 and < 3.0.0" }
