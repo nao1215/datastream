@@ -7,13 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- On Erlang, `split` matched a nonempty delimiter only against whole grapheme clusters, so `"\r"` did not match inside CRLF and `"e"` did not match before a combining mark, unless a chunk boundary fell there. It now matches code points on both targets, independent of chunk boundaries. Erlang callers that split CRLF text on `"\r"` now get pieces that start with `"\n"`, as on JavaScript.
+
 ### Fixed
 
 - Close resources when a callback raises during a terminal operation. A raise in `map`, a terminal callback, or a resource's own `next` used to leave the resource open or close it at a stale state, and a resource opened during the raising pull was never closed. Each resource now closes once at its latest state, newest first, before the exception continues. Exceptions from `close` during that cleanup are discarded so the original exception is reported.
-- A raising consumer of `broadcast`, `broadcast_bounded`, or `unzip` releases its queue, so the other consumers keep reading and a bounded broadcast no longer reports `QueueLimitExceeded` for the abandoned consumer. If the shared upstream raises, it is closed and the other consumers end after their queued values.
+- A raising consumer of `broadcast`, `broadcast_bounded`, or `unzip` releases its queue, so the other consumers keep reading and a bounded broadcast no longer reports `QueueLimitExceeded` for the abandoned consumer. If the shared upstream raises, it is closed, and each other consumer raises after reading its queued values instead of ending as if the upstream had finished.
 - On Erlang, a raise in the consumer stops the workers started by `merge`, `race`, `timeout`, the time operators, `map_ordered`, `map_unordered`, and `each_unordered`, and closes their sources. They used to keep running until the consumer process exited. A source that raises inside a worker is closed before the worker exits.
 - On JavaScript, a callback that raises during an async iterator's `next()` closes the resources the iterator opened, including one opened by that pull. `return()` and `throw()` report a raising `close` through their promise instead of throwing synchronously, and `throw(error)` always rejects with `error`.
-- On Erlang, `split` matched a nonempty delimiter only against whole grapheme clusters, so `"\r"` did not match inside CRLF and `"e"` did not match before a combining mark, unless a chunk boundary fell there. It now matches code points on both targets, independent of chunk boundaries.
 - `split(on: "")` no longer resegments the whole unfinished grapheme for each chunk. A grapheme of 30,000 code points delivered one code point per chunk took about 40 seconds on Erlang; it now takes linear time.
 
 ### Documentation

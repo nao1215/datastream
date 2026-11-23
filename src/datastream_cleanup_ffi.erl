@@ -14,7 +14,7 @@
 
 -module(datastream_cleanup_ffi).
 -export([new_cell/1, set_cell/2, touch_cell/1, take_cell/2, discard_cell/1,
-         guard/1, new_frame/0, guard_in/3]).
+         guard/1, new_frame/0, guard_in/3, raise/1]).
 
 new_cell(Cleanup) ->
     Key = {datastream_cell, erlang:unique_integer([positive]), self()},
@@ -208,3 +208,12 @@ ordered(Cells, Before) ->
 quietly(Fun) ->
     try Fun() catch _:_ -> nil end,
     nil.
+
+raise(Message) ->
+    erlang:error(#{
+        gleam_error => panic,
+        message => Message,
+        module => <<"datastream">>,
+        function => <<"raise">>,
+        line => 0
+    }).

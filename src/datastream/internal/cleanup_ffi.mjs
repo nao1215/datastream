@@ -124,3 +124,7 @@ export function guard_in(frame, body, on_raise) {
   frames.pop();
   return value;
 }
+
+export function raise(message) {
+  throw new globalThis.Error(message);
+}

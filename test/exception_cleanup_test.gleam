@@ -221,8 +221,21 @@ pub fn broadcast_upstream_raise_closes_upstream_and_ends_others_test() {
     )
   let assert [left, right] = datastream.broadcast(stream, 2)
   assert rescue(fn() { datastream.to_list(left) }) == Error(Nil)
-  assert datastream.to_list(right) == [0, 1]
-  assert_closed_once(1)
+  // The other consumer reads its queued values, then raises too instead
+  // of ending as if the upstream had finished.
+  assert rescue(fn() { datastream.take(right, 2) |> datastream.to_list })
+    == Ok([0, 1])
+  let assert [left, right] = datastream.broadcast(stream, 2)
+  assert rescue(fn() { datastream.to_list(left) }) == Error(Nil)
+  assert rescue(fn() { datastream.to_list(right) }) == Error(Nil)
+  assert_closed_once(2)
+}
+
+pub fn unused_consumer_does_not_hold_a_cleanup_cell_test() {
+  // Building consumers that are never pulled must not register anything
+  // that outlives them; reading the other consumer still works.
+  let #(left, _right) = datastream.unzip(datastream.from_list([#(1, "a")]))
+  assert datastream.to_list(left) == [1]
 }
 
 // --- random pipelines -------------------------------------------------------

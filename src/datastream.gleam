@@ -1026,6 +1026,9 @@ type BroadcastState(a) {
   BroadcastPulling(consumers: List(Consumer(a)), policy: QueuePolicy(a))
   BroadcastClosing(terminal: a, pending: List(Int))
   BroadcastFailed(terminal: a, pending: List(Int))
+  // The upstream raised during a pull. Consumers read their queued values
+  // and then raise as well.
+  BroadcastBroken(consumers: List(Consumer(a)))
 }
 
 type QueuePolicy(a) {
@@ -1056,6 +1059,8 @@ type ConsumerPull(a) {
 /// ## Panics
 ///
 /// On Erlang, consume each returned stream in the process that called `broadcast`. Reading it in another process panics because its shared state belongs to the creating process.
+///
+/// If the upstream raises while one consumer pulls it, the upstream is closed and each other consumer raises after reading the values already queued for it.
 pub fn broadcast(over stream: Stream(a), into count: Int) -> List(Stream(a)) {
   stream_start_broadcast(stream, count, Unlimited)
 }
@@ -1135,10 +1140,17 @@ fn stream_broadcast_state(
   )
 }
 
-// The cell finishes the consumer if the terminal reading it raises.
+// The first pull creates a cell that finishes the consumer if the terminal
+// reading it raises. A consumer that is never pulled holds no cell.
 fn stream_broadcast_member(shared: Shared(a), consumer_id: Int) -> Stream(a) {
-  let cell = cleanup.new(fn() { stream_broadcast_finish(shared, consumer_id) })
-  stream_broadcast_consumer(shared, consumer_id, cell)
+  make(
+    pull: fn() {
+      let cell =
+        cleanup.new(fn() { stream_broadcast_finish(shared, consumer_id) })
+      pull(stream_broadcast_consumer(shared, consumer_id, cell))
+    },
+    close: fn() { stream_broadcast_finish(shared, consumer_id) },
+  )
 }
 
 fn stream_broadcast_consumer(
@@ -1171,6 +1183,18 @@ fn stream_broadcast_pull(shared: Shared(a), consumer_id: Int) -> Step(a, Nil) {
     Error(Nil) -> Done
     Ok(BroadcastFailed(terminal, pending)) ->
       stream_broadcast_emit_terminal(shared, terminal, pending, consumer_id)
+    Ok(BroadcastBroken(consumers)) ->
+      case stream_pop_queued(consumers, consumer_id) {
+        InactiveConsumer -> Done
+        QueuedElement(element, consumers) -> {
+          ref.set(shared.state, BroadcastBroken(consumers:))
+          Next(element, Nil)
+        }
+        WaitingConsumer -> {
+          stream_broadcast_finish(shared, consumer_id)
+          stream_broadcast_raise_broken()
+        }
+      }
     Ok(BroadcastClosing(terminal, pending)) -> {
       ref.set(
         shared.state,
@@ -1279,11 +1303,13 @@ fn stream_broadcast_after_pull(
     | Ok(BroadcastRunning(..)), Done
     | Ok(BroadcastClosing(..)), Done
     | Ok(BroadcastFailed(..)), Done
+    | Ok(BroadcastBroken(..)), Done
     -> Done
     Error(Nil), Next(_, rest)
     | Ok(BroadcastRunning(..)), Next(_, rest)
     | Ok(BroadcastClosing(..)), Next(_, rest)
     | Ok(BroadcastFailed(..)), Next(_, rest)
+    | Ok(BroadcastBroken(..)), Next(_, rest)
     -> {
       close(rest)
       Done
@@ -1331,7 +1357,8 @@ fn stream_broadcast_commit(
         Error(Nil)
         | Ok(BroadcastRunning(..))
         | Ok(BroadcastPulling(..))
-        | Ok(BroadcastFailed(..)) -> Done
+        | Ok(BroadcastFailed(..))
+        | Ok(BroadcastBroken(..)) -> Done
       }
     }
   }
@@ -1382,6 +1409,13 @@ fn stream_broadcast_finish(shared: Shared(a), consumer_id: Int) -> Nil {
     Error(Nil) -> Nil
     Ok(BroadcastFailed(terminal, pending)) ->
       stream_broadcast_remove_pending(shared, terminal, pending, consumer_id)
+    Ok(BroadcastBroken(consumers)) -> {
+      let consumers = stream_broadcast_cancel(consumers, consumer_id)
+      case list.any(consumers, fn(consumer) { consumer.active }) {
+        True -> ref.set(shared.state, BroadcastBroken(consumers:))
+        False -> ref.delete(shared.state)
+      }
+    }
     Ok(BroadcastClosing(terminal, pending)) ->
       ref.set(
         shared.state,
@@ -1417,23 +1451,26 @@ fn stream_broadcast_finish(shared: Shared(a), consumer_id: Int) -> Nil {
 }
 
 // The upstream raised during a pull. Consumers keep their queued values
-// and then end.
+// and then raise, so a consumer's result is never cut short silently.
 fn stream_broadcast_abandon(shared: Shared(a)) -> Nil {
   case ref.get(shared.state) {
-    Ok(BroadcastPulling(consumers, policy)) ->
+    Ok(BroadcastPulling(consumers, _)) ->
       case list.any(consumers, fn(consumer) { consumer.active }) {
-        True ->
-          ref.set(
-            shared.state,
-            BroadcastRunning(upstream: None, consumers:, policy:),
-          )
+        True -> ref.set(shared.state, BroadcastBroken(consumers:))
         False -> ref.delete(shared.state)
       }
     Error(Nil)
     | Ok(BroadcastRunning(..))
     | Ok(BroadcastClosing(..))
-    | Ok(BroadcastFailed(..)) -> Nil
+    | Ok(BroadcastFailed(..))
+    | Ok(BroadcastBroken(..)) -> Nil
   }
+}
+
+fn stream_broadcast_raise_broken() -> Step(a, Nil) {
+  cleanup.raise(
+    "datastream: the upstream shared by these consumers raised while another consumer was reading it",
+  )
 }
 
 fn stream_broadcast_cancel(

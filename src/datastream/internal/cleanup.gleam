@@ -12,8 +12,10 @@
 //// state shared between several terminal operations.
 ////
 //// On Erlang the state lives in the process dictionary of the process
-//// that created it. Taking a cell in another process runs the cleanup
-//// passed by that caller instead.
+//// that created it. Every run of a stream stays in the process that
+//// opened it: workers pull their sources for the whole run, and shared
+//// consumers must be pulled in their creating process. Taking a cell in
+//// another process runs the cleanup passed by that caller instead.
 
 /// A cleanup that runs at most once.
 pub type Cell
@@ -64,3 +66,9 @@ pub fn new_frame() -> Frame
 @external(javascript, "./cleanup_ffi.mjs", "guard_in")
 @internal
 pub fn guard_in(frame: Frame, body: fn() -> a, on_raise: fn() -> Nil) -> a
+
+/// Raise an exception with `message`, like `panic`.
+@external(erlang, "datastream_cleanup_ffi", "raise")
+@external(javascript, "./cleanup_ffi.mjs", "raise")
+@internal
+pub fn raise(message: String) -> a
