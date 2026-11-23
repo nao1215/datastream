@@ -1,5 +1,5 @@
 name = "datastream"
-version = "0.22.0"
+version = "0.23.0"
 description = "Lazy streams of values, text, and bytes with resource cleanup for Gleam"
 licences = ["MIT"]
 repository = { type = "github", user = "nao1215", repo = "datastream" }
