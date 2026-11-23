@@ -43,6 +43,19 @@ fn assert_unstarted_return(
 ) -> Nil
 
 @target(javascript)
+@external(javascript, "./datastream_javascript_redesign_test_ffi.mjs", "assert_callback_raise")
+fn assert_callback_raise(
+  iterable: datastream.AsyncIterable(Int),
+  history: fn() -> List(String),
+  at: Int,
+  expected: List(String),
+) -> Nil
+
+@target(javascript)
+@external(javascript, "./datastream_javascript_redesign_test_ffi.mjs", "assert_close_error")
+fn assert_close_error(make: fn() -> datastream.AsyncIterable(Int)) -> Nil
+
+@target(javascript)
 fn record(events: ref.Ref(List(String)), event: String) -> Nil {
   let assert Ok(previous) = ref.get(events)
   ref.set(events, [event, ..previous])
@@ -50,8 +63,14 @@ fn record(events: ref.Ref(List(String)), event: String) -> Nil {
 
 @target(javascript)
 fn observed_iterable() -> #(datastream.AsyncIterable(Int), fn() -> List(String)) {
+  let #(stream, history) = observed_stream()
+  #(datastream.to_async_iterable(stream), history)
+}
+
+@target(javascript)
+fn observed_stream() -> #(datastream.Stream(Int), fn() -> List(String)) {
   let events = ref.new([])
-  let iterable =
+  let stream =
     datastream.resource(
       open: fn() {
         record(events, "open")
@@ -63,8 +82,7 @@ fn observed_iterable() -> #(datastream.AsyncIterable(Int), fn() -> List(String))
       },
       close: fn(state) { record(events, "close:" <> int.to_string(state)) },
     )
-    |> datastream.to_async_iterable
-  #(iterable, fn() {
+  #(stream, fn() {
     let assert Ok(reversed) = ref.get(events)
     list.reverse(reversed)
   })
@@ -92,4 +110,47 @@ pub fn for_await_body_throw_closes_the_latest_state_once_test() {
 pub fn return_before_first_next_leaves_the_resource_unopened_test() {
   let #(iterable, history) = observed_iterable()
   assert_unstarted_return(iterable, history)
+}
+
+@target(javascript)
+fn raising_iterable(
+  at: Int,
+) -> #(datastream.AsyncIterable(Int), fn() -> List(String)) {
+  let #(stream, history) = observed_stream()
+  let iterable =
+    stream
+    |> datastream.map(fn(value) {
+      case value == at {
+        True -> panic as "callback"
+        False -> value
+      }
+    })
+    |> datastream.to_async_iterable
+  #(iterable, history)
+}
+
+@target(javascript)
+pub fn callback_raise_closes_the_latest_state_once_test() {
+  let #(iterable, history) = raising_iterable(2)
+  assert_callback_raise(iterable, history, 2, [
+    "open", "pull:0", "pull:1", "pull:2", "close:3",
+  ])
+}
+
+@target(javascript)
+pub fn callback_raise_on_first_pull_closes_the_resource_test() {
+  let #(iterable, history) = raising_iterable(0)
+  assert_callback_raise(iterable, history, 0, ["open", "pull:0", "close:1"])
+}
+
+@target(javascript)
+pub fn close_error_rejects_instead_of_throwing_test() {
+  assert_close_error(fn() {
+    datastream.resource(
+      open: fn() { 0 },
+      next: fn(n) { Next(n, n + 1) },
+      close: fn(_) { panic as "close failed" },
+    )
+    |> datastream.to_async_iterable
+  })
 }
