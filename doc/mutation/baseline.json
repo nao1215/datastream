@@ -148,6 +148,6 @@
 {"file":"src/datastream.gleam","line":4180,"column":27,"function":"parallel_map_dispatch","mutator":"+ -> -","text":"next_dispatch_index: index + 1,","status":"KILLED"},
 {"file":"src/datastream.gleam","line":4562,"column":8,"function":"parallel_race_follow","mutator":"!= -> ==","text":"if from != index","status":"KILLED"},
 {"file":"src/datastream.gleam","line":4799,"column":53,"function":"pump_on_first_pull","mutator":"False -> True","text":"Pump(worker:, mailbox:, cell:, watching:, requested: False, context:),","status":"KILLED"},
-{"file":"src/datastream.gleam","line":4849,"column":24,"function":"pump_ensure_requested","mutator":"True -> False","text":"Pump(..pump, requested: True)","status":"KILLED"},
+{"file":"src/datastream.gleam","line":4849,"column":24,"function":"pump_ensure_requested","mutator":"True -> False","text":"Pump(..pump, requested: True)","status":"LIVED"},
 {"file":"src/datastream.gleam","line":4867,"column":24,"function":"pump_handle_event","mutator":"False -> True","text":"Pump(..pump, requested: False),","status":"KILLED"}
 ]}
