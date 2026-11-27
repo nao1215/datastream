@@ -24,22 +24,19 @@ This relation found three bugs: `split(on: "")` split a grapheme that spanned tw
 
 ## Nightly runs
 
-`.github/workflows/nightly-property.yml` runs the whole suite ten times with `METAMON_RUNS_MULTIPLIER=10`, each pass with a new seed. A failure report prints its seed, so the case can be replayed with `metamon.with_seed` and kept as a regression test.
+`.github/workflows/nightly-property.yml` runs the whole suite ten times with `METAMON_RUNS_MULTIPLIER=10`, each pass with a new seed. A failure report prints its seed, so the case can be replayed with `metamon.Config(..metamon.default_config(), seed: Some(seed))` and kept as a regression test.
 
 ## Mutation testing
 
-There is no mutation testing tool for Gleam, so `gleam_mutate.py` (from the mutation-testing lab in nao1215/debimate) is run by hand on a copy of the project. It rewrites one operator or boolean result at a time and runs `gleam test` on the Erlang target; a mutant that makes the suite hang past 60 seconds counts as killed. For this run the script also mutated integer comparisons and `+` / `-`, which carry most of the decisions in this library. The score is killed / (killed + lived).
+`gleam run -m metamon/mutation` changes one operator, `!` or boolean literal in `src/datastream.gleam` at a time and runs `gleam test --target erlang` on each change. `.github/workflows/mutation.yml` mutates the module on every pull request that changes it and fails on a survivor that `doc/mutation/baseline.json` does not list; the weekly run does the same.
 
-| Date | Files | Killed | Lived | Score |
-|---|---|---:|---:|---:|
-| 2026-11-19, first run | every module under `src/` with mutants (116) | 72 | 44 | 62.1% |
-| 2026-11-19, after the boundary tests | same | 89 | 27 | 76.7% |
+The first run (2026-11-27) scored 85.4%. Tests were then added for the read-ahead of `buffer` (it pulls exactly `prefetch` elements before the first one is returned) and for `records`, `split(on: "")`, `map_ordered` and `map_unordered` not pulling a source that has ended. Three more runs gave 88.7%, 86.0% and the baseline below: the suite has tests that depend on timing, so a mutant can live in one run and be killed in another. The baseline therefore lists every mutant that lived in any of the runs after the new tests, 24 of the 150 that compile (84.0%), so the gate does not fail on a timing change it has seen before.
 
-The names below refer to the API at the time of the recorded run. The first run showed that no test used the smallest valid argument (`fixed_size(size: 1)`, `chunks_of(into: 1)`, `buffer_checked(prefetch: 1)`, `drop_checked(up_to: 0)`, `broadcast_bounded(into: 1, max_queue: 1)`, one worker and `max_buffer == max_workers` in `par`), a frame of exactly `max_frame_size`, a queue of exactly `max_queue`, or the UTF-8 lead-byte boundaries (valid 0xC2 and rejected 0xF5). Tests for each now kill those mutants. The recorded survivor groups below account for 26 of the 27 survivors; the historical notes do not identify the remaining mutant:
+The survivors are grouped by cause. Timing (10): the deadlines and windows of `sample`, `throttle`, `rate_limit` and `window`, and the wait in `time_milliseconds_until`, where moving a boundary by one millisecond is not observable with the clock the tests use. The in-flight bound of `map_ordered` and `map_unordered` (2): the dispatch check `busy + finished >= max_buffer`, which a test can only pin down by controlling when tasks finish; it is the next test to write. Equivalent (9): the chunk bookkeeping of `delimited`, `split`, `binary_take_bytes` and the read-behind of `keep_newest`, which only changes how much is rescanned or concatenated; the upper word of an 8-byte length prefix, which is only read after 4 GiB are buffered; `range` and `drop` at their equal bounds; and the `active` default of a broadcast consumer that always exists. The rest (3), in `once`, `take` and `lines`, were killed in two of the three runs and lived in the third, when the machine was under load.
 
-- `erlang/time` (7): deadlines one millisecond earlier or later in `throttle`, `rate_limit` and `ms_until`. The tests use the wall clock, so a 1 ms shift is not observable without a fake clock.
-- `erlang/par` (9): the worker and buffer limits in the dispatch loop (`>=` against `>`), which only change how many workers run at once, and the loser cleanup in `race`.
-- Equivalent mutants (6): `take` and `drop` treat `n < 0` and `n <= 0` the same, `source.range` handles `start == stop` before the `<` check, `list_at_bool` is never called past the end, and `delimited` rescans a few bytes earlier (`resume_scan_offset`, `find_delimiter`) with the same result.
-- `stream.buffer` (1): prefetching one element more than `capacity` is not visible in the output; only a pull counter would see it.
-- `broadcast` consumer ids (1) and `delimited`'s `has_seen_input` flag (1): the observable output did not change for any test input; they need a closer look.
-- `length_prefixed` (1): `prefix_size - length` instead of `+` takes a branch that still yields the same frames for the tested inputs.
+<!-- mutation:start -->
+| Module | Killed | Lived | Timed out | Score |
+|---|---:|---:|---:|---:|
+| `datastream` | 126 | 24 | 0 | 84.0% |
+| all | 126 | 24 | 0 | 84.0% |
+<!-- mutation:end -->

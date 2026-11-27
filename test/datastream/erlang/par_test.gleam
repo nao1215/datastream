@@ -4,6 +4,9 @@
 import datastream
 
 @target(erlang)
+import datastream/internal/ref
+
+@target(erlang)
 import datastream/erlang/internal/event_log
 
 @target(erlang)
@@ -11,6 +14,9 @@ import datastream/erlang/internal/watchdog
 
 @target(erlang)
 import gleam/erlang/process
+
+@target(erlang)
+import gleam/int
 
 @target(erlang)
 import gleam/list
@@ -26,6 +32,48 @@ import gleeunit/should
 pub const beam_only_marker: String = "datastream/erlang/par_test is BEAM-only"
 
 // --- map_ordered ---------------------------------------------------------
+
+@target(erlang)
+/// Once the source reports the end, `map_ordered` and `map_unordered` wait
+/// for the running tasks without pulling the source again.
+pub fn parallel_maps_do_not_pull_a_finished_source_test() {
+  let pulls_of = fn(map) {
+    let log = ref.new([])
+    let source =
+      datastream.resource(
+        open: fn() { [1, 2, 3] },
+        next: fn(remaining) {
+          let assert Ok(pulled) = ref.get(log)
+          ref.set(log, [list.length(remaining), ..pulled])
+          case remaining {
+            [] -> datastream.Done
+            [element, ..rest] -> datastream.Next(element:, state: rest)
+          }
+        },
+        close: fn(_) { Nil },
+      )
+    let assert Ok(mapped) = map(source)
+    let output = datastream.to_list(mapped) |> list.sort(by: int.compare)
+    let assert Ok(pulled) = ref.get(log)
+    ref.delete(log)
+    #(output, list.reverse(pulled))
+  }
+  let expected = #([2, 4, 6], [3, 2, 1, 0])
+  assert pulls_of(datastream.map_ordered(
+      over: _,
+      with: fn(x) { x * 2 },
+      max_workers: 4,
+      max_buffer: 8,
+    ))
+    == expected
+  assert pulls_of(datastream.map_unordered(
+      over: _,
+      with: fn(x) { x * 2 },
+      max_workers: 4,
+      max_buffer: 8,
+    ))
+    == expected
+}
 
 @target(erlang)
 pub fn map_ordered_preserves_input_order_test() {
