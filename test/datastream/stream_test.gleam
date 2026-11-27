@@ -398,6 +398,52 @@ pub fn buffer_preserves_elements_when_capacity_exceeds_source_test() {
   |> should.equal([1, 2, 3])
 }
 
+/// A consumer pull fills the queue up to `prefetch` elements, not one more,
+/// before it returns the first one.
+pub fn buffer_reads_ahead_exactly_the_capacity_test() {
+  let log = ref.new([])
+  let assert Ok(buffered) =
+    logged_resource([1, 2, 3, 4, 5], "source", log)
+    |> datastream.buffer(prefetch: 2)
+  assert datastream.first(buffered) == Ok(1)
+  let events = list.reverse(read(log))
+  ref.delete(log)
+  assert events
+    == [
+      Opened("source"),
+      Pulled("source", 0),
+      Pulled("source", 1),
+      Closed("source", 2),
+    ]
+}
+
+/// After the source reports the end, `records` and `split(on: "")` emit
+/// what they still hold without pulling the source again.
+pub fn text_operators_do_not_pull_a_finished_source_test() {
+  let run = fn(operator) {
+    let log = ref.new([])
+    let output = operator(logged_resource(["a", "b"], "source", log))
+    let events = list.reverse(read(log))
+    ref.delete(log)
+    #(output, events)
+  }
+  let pulls = [
+    Opened("source"),
+    Pulled("source", 0),
+    Pulled("source", 1),
+    Pulled("source", 2),
+    Closed("source", 2),
+  ]
+  assert run(fn(source) {
+      datastream.records(over: source) |> datastream.to_list |> list.flatten
+    })
+    == #(["a", "b"], pulls)
+  assert run(fn(source) {
+      datastream.split(over: source, on: "") |> datastream.to_list
+    })
+    == #(["a", "b"], pulls)
+}
+
 pub fn buffer_on_empty_yields_empty_test() {
   from_list([])
   |> datastream.buffer(prefetch: 4)

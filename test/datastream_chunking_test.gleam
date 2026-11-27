@@ -17,7 +17,6 @@ import gleam/list
 import gleam/string
 import metamon
 import metamon/generator.{type Generator}
-import metamon/generator/range
 
 // ---------- helpers ----------
 
@@ -48,7 +47,10 @@ fn group_loop(
 }
 
 fn sizes_generator() -> Generator(List(Int)) {
-  generator.list_of(generator.int(range.constant(1, 5)), range.constant(0, 6))
+  generator.list_of(
+    generator.int(generator.range(from: 1, to: 5)),
+    generator.range(from: 0, to: 6),
+  )
 }
 
 /// Text built from pieces that stress the boundaries the parsers care
@@ -60,7 +62,7 @@ fn text_pieces_generator() -> Generator(List(String)) {
     generator.element_of([
       "a", "b", "e", "\n", "\r", "\r\n", ",", ";", "é", "日", "😀", "\u{0301}",
     ]),
-    range.constant(0, 24),
+    generator.range(from: 0, to: 24),
   )
 }
 
@@ -75,7 +77,7 @@ fn text_pieces_without_combining_generator() -> Generator(List(String)) {
     generator.element_of([
       "a", "b", "e", "\n", "\r", "\r\n", ",", ";", "é", "日", "😀",
     ]),
-    range.constant(0, 24),
+    generator.range(from: 0, to: 24),
   )
 }
 
@@ -97,7 +99,7 @@ fn with_empty_chunks(chunks: List(a), empty: a) -> List(a) {
 }
 
 fn bytes_generator() -> Generator(BitArray) {
-  generator.bit_array(range.constant(0, 40))
+  generator.bit_array(generator.range(from: 0, to: 40))
 }
 
 /// Bytes drawn from a small alphabet so that delimiters and short
@@ -105,7 +107,7 @@ fn bytes_generator() -> Generator(BitArray) {
 fn framed_bytes_generator() -> Generator(BitArray) {
   generator.list_of(
     generator.element_of([0, 1, 2, 3, 10, 13, 255]),
-    range.constant(0, 40),
+    generator.range(from: 0, to: 40),
   )
   |> generator.map(fn(values) {
     list.fold(values, <<>>, fn(acc, value) { <<acc:bits, value:8>> })
@@ -141,9 +143,13 @@ fn text_relation_over(
     let expected = run(whole)
     // An empty input is left out: an empty stream and a stream of one
     // empty string are different inputs to `split`.
-    pieces == []
-    || run(chunks) == expected
-    && run(with_empty_chunks(chunks, "")) == expected
+    case pieces {
+      [] -> Nil
+      _ -> {
+        assert run(chunks) == expected
+        assert run(with_empty_chunks(chunks, "")) == expected
+      }
+    }
   })
 }
 
@@ -155,9 +161,13 @@ fn byte_relation(
     let #(bytes, sizes) = input
     let #(whole, chunks) = byte_chunkings(bytes, sizes)
     let expected = run(whole)
-    bytes == <<>>
-    || run(chunks) == expected
-    && run(with_empty_chunks(chunks, <<>>)) == expected
+    case bytes {
+      <<>> -> Nil
+      _ -> {
+        assert run(chunks) == expected
+        assert run(with_empty_chunks(chunks, <<>>)) == expected
+      }
+    }
   })
 }
 
@@ -209,22 +219,22 @@ pub fn split_into_graphemes_is_invariant_under_rechunking_test() -> Nil {
 pub fn split_into_graphemes_matches_string_to_graphemes_test() -> Nil {
   metamon.forall(text_pieces_generator(), fn(pieces) {
     let whole = string.concat(pieces)
-    datastream.to_list(datastream.split(
-      over: datastream.from_list([whole]),
-      on: "",
-    ))
-    == string.to_graphemes(whole)
+    assert datastream.to_list(datastream.split(
+        over: datastream.from_list([whole]),
+        on: "",
+      ))
+      == string.to_graphemes(whole)
   })
 }
 
 pub fn split_on_delimiter_matches_string_split_test() -> Nil {
   metamon.forall(text_pieces_without_combining_generator(), fn(pieces) {
     let whole = string.concat(pieces)
-    datastream.to_list(datastream.split(
-      over: datastream.from_list([whole]),
-      on: ",",
-    ))
-    == string.split(whole, ",")
+    assert datastream.to_list(datastream.split(
+        over: datastream.from_list([whole]),
+        on: ",",
+      ))
+      == string.split(whole, ",")
   })
 }
 
@@ -242,11 +252,18 @@ pub fn utf8_decode_is_invariant_under_rechunking_test() -> Nil {
 }
 
 pub fn utf8_decode_of_valid_text_is_invariant_under_rechunking_test() -> Nil {
-  byte_relation(generator.bit_array_utf8(range.constant(0, 16)), fn(chunks) {
-    datastream.to_string(
-      datastream.utf8_decode_lossy(over: datastream.from_list(chunks)),
+  byte_relation(
+    generator.string(
+      of: generator.Unicode,
+      length: generator.range(from: 0, to: 16),
     )
-  })
+      |> generator.map(bit_array.from_string),
+    fn(chunks) {
+      datastream.to_string(
+        datastream.utf8_decode_lossy(over: datastream.from_list(chunks)),
+      )
+    },
+  )
 }
 
 pub fn utf8_encode_then_decode_round_trips_test() -> Nil {
@@ -255,11 +272,11 @@ pub fn utf8_encode_then_decode_round_trips_test() -> Nil {
     fn(input) {
       let #(pieces, sizes) = input
       let #(_, chunks) = text_chunkings(pieces, sizes)
-      datastream.from_list(chunks)
-      |> datastream.utf8_encode
-      |> datastream.utf8_decode_lossy
-      |> datastream.to_string
-      == string.concat(pieces)
+      assert datastream.from_list(chunks)
+        |> datastream.utf8_encode
+        |> datastream.utf8_decode_lossy
+        |> datastream.to_string
+        == string.concat(pieces)
     },
   )
 }
