@@ -107,3 +107,8 @@ mutation workers="8":
 # Record the last full mutation run as the baseline and refresh doc/testing.md
 mutation-record:
   gleam run -m metamon/mutation -- baseline
+
+# Line coverage of the Erlang test run, written to build/coverage/lcov.info
+coverage:
+  gleam build --target erlang
+  gleam run -m metamon/mutation -- coverage

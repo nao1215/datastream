@@ -26,6 +26,10 @@ This relation found three bugs: `split(on: "")` split a grapheme that spanned tw
 
 `.github/workflows/nightly-property.yml` runs the whole suite ten times with `METAMON_RUNS_MULTIPLIER=10`, each pass with a new seed. A failure report prints its seed, so the case can be replayed with `metamon.Config(..metamon.default_config(), seed: Some(seed))` and kept as a regression test.
 
+## Coverage
+
+`just coverage` (`gleam build --target erlang`, then `gleam run -m metamon/mutation -- coverage`) runs the tests on the Erlang target with every module under `src/` measured and writes `build/coverage/lcov.info`; `.github/workflows/coverage.yml` reports it with octocov on pull requests and main. The local run on 2026-11-28 reached 94.1% of the lines.
+
 ## Mutation testing
 
 `gleam run -m metamon/mutation` changes one operator, `!` or boolean literal in `src/datastream.gleam` at a time and runs `gleam test --target erlang` on each change. `.github/workflows/mutation.yml` mutates the module on every pull request that changes it and fails on a survivor that `doc/mutation/baseline.json` does not list; the weekly run does the same.
